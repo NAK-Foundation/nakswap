@@ -45,7 +45,8 @@ const prices = createPrices();
 // ORDER_KEY_SECRET, if set, keeps order links separate from the operator key (changing it
 // invalidates existing order links, so set it before launch and leave it).
 const secret = env.ORDER_KEY_SECRET || (env.RELAY_IDENTITY_SEED ? `nakswap-order-key:${env.RELAY_IDENTITY_SEED}` : undefined);
-const handle = createApp({ houdini, ic, prices, secret, log: (...a) => console.log(new Date().toISOString(), ...a) });
+const orderLimitPerHour = Number(env.ORDER_LIMIT_PER_HOUR) > 0 ? Number(env.ORDER_LIMIT_PER_HOUR) : undefined;
+const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
 const server = http.createServer((req, res) =>
   handle(req, res).catch((e) => {

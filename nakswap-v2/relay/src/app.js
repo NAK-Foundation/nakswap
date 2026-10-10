@@ -178,11 +178,14 @@ export function createApp({
   pokeEveryMs = 15_000,
   houdiniCacheMs = 5_000,
   quoteCacheMs = 20_000,
+  // Site-wide orders per hour. 150 keeps well inside the router's 150 open-order cap (orders
+  // stay open ~5-45 min while Houdini works) and its ~120-180 swaps/hour throughput.
+  orderLimitPerHour = 150,
 }) {
   // Per visitor IP, plus global ceilings so many addresses together still can't flood the
   // router with orders or burn the Houdini quote allowance.
   const allowOrder = limiter(5, 10 * 60_000);
-  const allowOrderGlobal = limiter(60, 60 * 60_000);
+  const allowOrderGlobal = limiter(orderLimitPerHour, 60 * 60_000);
   const allowQuote = limiter(30, 60_000);
   const allowView = limiter(120, 60_000);
   const allowTokens = limiter(60, 60_000);

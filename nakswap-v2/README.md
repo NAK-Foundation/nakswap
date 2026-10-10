@@ -219,7 +219,7 @@ Router (`src/router/main.mo`, `lib/Guard.mo`):
 
 Relay (`relay/src/app.js`, `server.js`):
 - Client IP from Railway's `X-Real-IP` (the left end of `X-Forwarded-For` is client-controlled).
-- Orders: 5 per IP per 10 min, 60 per hour overall. Quotes 30/min per IP, cached 20 s to save
+- Orders: 5 per IP per 10 min, 150 per hour overall (`ORDER_LIMIT_PER_HOUR` on Railway to change it). Quotes 30/min per IP, cached 20 s to save
   the Houdini quota. Limiter memory is bounded.
 - Order links are `id-key`, where the key is an HMAC of the id under the relay seed; without
   the key `/api/orders/:id` answers 404. One router poke per order per 15 s.

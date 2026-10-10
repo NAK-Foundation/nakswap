@@ -3,6 +3,7 @@
 // pulls the input with icrc2_transfer_from, and if amountOutMinimum is not met the input
 // is sent back to the caller and an error is returned.
 import Int "mo:core/Int";
+import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
 import Ext "../common/Ext";
@@ -14,6 +15,11 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
   transient let feeKeep = 997_000; // 0.3% pool fee, per 1e6 like ICPSwap
   // Test hook: make the next swap fail inside the pool after the deposit.
   var breakNextSwap = false;
+  // Test hook: the next successful swap also delivers this much extra NAK (a delayed
+  // withdraw from an earlier swap landing at the same moment).
+  var bonusNextSwap = 0;
+  // ICP left in the pool by a failed withdraw, per caller (ICPSwap's "unused balance").
+  let unusedIcp = Map.empty<Principal, Nat>();
 
   type TransferFromArg = {
     spender_subaccount : ?Blob;
@@ -42,6 +48,33 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
   };
 
   public func setBreakNextSwap(b : Bool) : async () { breakNextSwap := b };
+  public func setBonusNextSwap(n : Nat) : async () { bonusNextSwap := n };
+
+  public query func getUserUnusedBalance(user : Principal) : async { #ok : { balance0 : Nat; balance1 : Nat }; #err : Ext.PoolError } {
+    let icp = unusedIcp.get(user) ?? 0;
+    #ok(if (icpIsToken0) { { balance0 = icp; balance1 = 0 } } else { { balance0 = 0; balance1 = icp } });
+  };
+
+  public shared ({ caller }) func withdraw(args : Ext.WithdrawArgs) : async { #ok : Nat; #err : Ext.PoolError } {
+    if (args.token != icpLedger.toText()) { return #err(#UnsupportedToken(args.token)) };
+    let have = unusedIcp.get(caller) ?? 0;
+    if (args.amount > have or args.amount <= args.fee) { return #err(#InsufficientFunds) };
+    unusedIcp.add(caller, (have - args.amount : Int).toNat());
+    let icp : IcpLedger = actor (icpLedger.toText());
+    switch (
+      await icp.icrc1_transfer({
+        from_subaccount = null;
+        to = { owner = caller; subaccount = null };
+        amount = (args.amount - args.fee : Int).toNat();
+        fee = ?args.fee;
+        memo = null;
+        created_at_time = null;
+      })
+    ) {
+      case (#Ok _) { #ok(args.amount) };
+      case (#Err _) { #err(#InternalError("transfer failed")) };
+    };
+  };
 
   public query func reserves() : async { icp : Nat; nak : Nat } { { icp = icpReserve; nak = nakReserve } };
 
@@ -80,6 +113,7 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
     if (breakNextSwap) {
       // Simulates "deposit succeeded, withdraw failed": funds stay in the pool.
       breakNextSwap := false;
+      unusedIcp.add(caller, (unusedIcp.get(caller) ?? 0) + amountIn);
       return #err(#InternalError("withdraw failed"));
     };
 
@@ -103,13 +137,13 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
       await nak.icrc1_transfer({
         from_subaccount = null;
         to = { owner = caller; subaccount = null };
-        amount = (amountOut - args.tokenOutFee : Int).toNat();
+        amount = (amountOut + bonusNextSwap - args.tokenOutFee : Int).toNat();
         fee = ?args.tokenOutFee;
         memo = null;
         created_at_time = null;
       })
     ) {
-      case (#Ok _) { #ok(amountOut) };
+      case (#Ok _) { bonusNextSwap := 0; #ok(amountOut) };
       case (#Err _) { #err(#InternalError("withdraw failed")) };
     };
   };

@@ -201,9 +201,55 @@ test('hardening: security headers, no CORS, spoofed X-Forwarded-For does not dod
       last = await call('POST', '/api/orders', { quoteId: q.body.routes[0].quoteId, recipient: ALICE }, { 'x-forwarded-for': `10.0.0.${i}` });
     }
     assert.equal(last.code, 429);
-    assert.equal(ic.orders.size, 5);
+    assert.equal(ic.orders.size, 1, 'a quote can be used for one order only');
     const junk = await call('POST', '/api/quote', { fromId: '../../etc', amount: '100' });
     assert.equal(junk.code, 400);
+  } finally {
+    close();
+  }
+});
+
+test('audit fixes: malformed URLs, invented quotes, bad keys, relay-set minimum', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const handle = createApp({ houdini, ic });
+  const { call, close } = await serve(handle);
+  try {
+    // A request line that used to throw outside the try and kill the process.
+    const net = await import('node:net');
+    const srv = http.createServer(handle);
+    await new Promise((r) => srv.listen(0, r));
+    const raw = await new Promise((resolve) => {
+      const sock = net.connect(srv.address().port, '127.0.0.1', () => sock.write('GET // HTTP/1.1\r\nHost: x\r\n\r\n'));
+      let buf = '';
+      sock.on('data', (d) => { buf += d; sock.end(); });
+      sock.on('close', () => resolve(buf));
+    });
+    srv.close();
+    assert.match(raw, /^HTTP\/1\.1 (400|404)/, 'answered instead of crashing');
+
+    const fake = await call('POST', '/api/orders', { quoteId: 'made-up', recipient: ALICE });
+    assert.equal(fake.code, 409, 'quotes the relay never issued are refused');
+    assert.equal(ic.orders.size, 0, 'and no router order is opened for them');
+
+    const q = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' });
+    const route = q.body.routes[0];
+    const o = await call('POST', '/api/orders', { quoteId: route.quoteId, recipient: ALICE, minNakOut: '1' });
+    assert.equal(o.code, 201);
+    const stored = ic.orders.get(BigInt(o.body.orderId));
+    assert.equal(stored.minNakOut, BigInt(route.guaranteedNak), 'the relay sets the minimum from its own quote, ignoring the client');
+    assert.ok(BigInt(route.guaranteedNak) < BigInt(route.nakOut));
+
+    const again = await call('POST', '/api/orders', { quoteId: route.quoteId, recipient: ALICE });
+    assert.equal(again.code, 409, 'one order per quote');
+
+    const bad = await call('GET', `/api/orders/${o.body.orderId}`, undefined, { 'x-order-key': 'ÿ'.repeat(20) });
+    assert.equal(bad.code, 404, 'non-hex keys are a plain 404, not a 502');
+
+    const arr = await call('POST', '/api/quote', { fromId: ['mock-usdt'], amount: '100' });
+    assert.equal(arr.code, 400, 'arrays are not accepted where strings are expected');
+    const hexAmt = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '0x10' });
+    assert.equal(hexAmt.code, 400);
   } finally {
     close();
   }

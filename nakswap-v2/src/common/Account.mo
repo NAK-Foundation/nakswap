@@ -43,6 +43,16 @@ module {
     self.toLedgerAccount(?input);
   };
 
+  // Per-order memo for payouts and refunds: random-looking (derived from the private deposit
+  // subaccount), so it reveals nothing on chain, but unique per order so two orders paying
+  // the same amount to the same principal in the same moment are never deduplicated.
+  public func orderMemo(self : Principal, depositSub : Blob) : Blob {
+    let a = depositSub.toArray();
+    let reversed = Array.tabulate<Nat8>(a.size(), func i = a[a.size() - 1 - i]).toBlob();
+    let h = self.toLedgerAccount(?reversed).toArray();
+    Array.tabulate<Nat8>(8, func i = h[4 + i]).toBlob();
+  };
+
   // ICP ledger account identifier: CRC32 || SHA224("\x0Aaccount-id" || principal || subaccount).
   public func accountId(owner : Principal, subaccount : ?Blob) : Blob {
     owner.toLedgerAccount(subaccount);

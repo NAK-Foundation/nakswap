@@ -550,7 +550,7 @@
     $('routes').querySelectorAll('.route:not([disabled])').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; store.set('nak.route', chosen.type); renderQuote(amount); updateAmountHint(); updateSwapBtn(); }));
     const r = chosen || routes[0];
     $('receiveAmt').textContent = `${fmt(e8(r.nakOut), 0)}`;
-    $('receiveHint').textContent = r.blocked ? `Can't swap this amount: ${r.blocked}.` : `Minimum after 1% slippage: ${fmt(e8(r.minNakOut), 0)} NAK`;
+    $('receiveHint').textContent = r.blocked ? `Can't swap this amount: ${r.blocked}.` : `Guaranteed at least ${fmt(e8(r.guaranteedNak ?? r.minNakOut), 0)} NAK, or your ICP back`;
     $('qSend').textContent = `${fmt(amount, 8)} ${token.symbol}`;
     $('qSendSub').textContent = `You send on ${token.chainName}`;
     $('qIcp').textContent = `≈ ${fmt(e8(r.icpOut), 4)} ICP`;

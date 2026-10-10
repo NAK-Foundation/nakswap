@@ -36,12 +36,18 @@ module {
 
   public func isActive(status : Status) : Bool {
     switch status {
-      case (#awaitingDeposit or #payoutPending _ or #refundPending _) { true };
+      // #swapping counts as active so an order interrupted mid-swap (trap, upgrade) is seen
+      // by the worker and moved to #needsReview instead of disappearing from view.
+      case (#awaitingDeposit or #swapping _ or #payoutPending _ or #refundPending _) { true };
       case _ { false };
     };
   };
 
   func nowNat64() : Nat64 { Int.abs(Time.now()).toNat64() };
+
+  func failingTooLong(since : Nat64) : Bool {
+    nowNat64() > since + 3_600_000_000_000;
+  };
 
   public func setStatus(order : Order, active : Set.Set<Nat>, status : Status) {
     order.status := status;
@@ -91,6 +97,11 @@ module {
         } catch (_) { return #processed(order.status) };
 
         if (bal == 0) {
+          // Re-check after the await: the order may have moved on or been removed meanwhile.
+          switch (orders.get(id), order.status) {
+            case (?_, #awaitingDeposit) {};
+            case _ { return #processed(order.status) };
+          };
           switch (order.houdiniId) {
             case null {
               // Never paired with a Houdini exchange: no one was told to pay, so drop it.
@@ -123,12 +134,12 @@ module {
       case (#payoutPending p) {
         if (cycles < Guard.criticalCycles) { return #processed(order.status) };
         state.busy := true;
-        try { await* payout(state, active, order, p) } finally { state.busy := false };
+        try { await* payout(state, active, self, order, p) } finally { state.busy := false };
       };
       case (#refundPending r) {
         if (cycles < Guard.criticalCycles) { return #processed(order.status) };
         state.busy := true;
-        try { await* refund(state, active, order, r) } finally { state.busy := false };
+        try { await* refund(state, active, self, order, r) } finally { state.busy := false };
       };
       case (#swapping _) {
         // Only reachable if a previous swap message trapped mid-flight.
@@ -194,7 +205,9 @@ module {
       return;
     };
     let slippageFloor = quoteOut * minus(bpsDenom, cfg.slippageBps) / bpsDenom;
-    let minOut = Nat.max(slippageFloor, order.minNakOut);
+    // minNakOut is what the user must receive; the pool's output also pays the pool's
+    // withdraw fee and our payout fee.
+    let minOut = Nat.max(slippageFloor, if (order.minNakOut == 0) { 0 } else { order.minNakOut + 2 * cfg.nakFee });
 
     let icpL = icp(cfg);
     let nakL = nak(cfg);
@@ -240,7 +253,8 @@ module {
         spender = { owner = cfg.pool; subaccount = null };
         amount = amountIn + fee;
         expected_allowance = null;
-        expires_at = null;
+        // Short-lived: if the swap fails before the pool pulls, no allowance lingers on main.
+        expires_at = ?(nowNat64() + 300_000_000_000);
         fee = ?fee;
         memo = null; // no order number on chain: nothing ties this transfer to an order
         created_at_time = null;
@@ -249,7 +263,7 @@ module {
     switch approved {
       case (#Ok _) {};
       case (#Err _) {
-        await* settleFromMain(active, fees, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, nakswapFee, "approve failed");
+        await* settleFromMain(active, fees, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, nakswapFee, bal, quoteOut, "approve failed");
         return;
       };
     };
@@ -274,7 +288,7 @@ module {
     } catch (e) { "pool call rejected: " # e.message() };
 
     // 4. Trust balances, not return values.
-    await* settleFromMain(active, fees, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, nakswapFee, swapNote);
+    await* settleFromMain(active, fees, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, nakswapFee, bal, quoteOut, swapNote);
   };
 
   func settleFromMain(
@@ -289,6 +303,8 @@ module {
     nakBaseline : Nat,
     amountIn : Nat,
     nakswapFee : Nat,
+    deposited : Nat,
+    quoteOut : Nat,
     note : Text,
   ) : async* () {
     let (icpNow, nakNow) = try {
@@ -299,6 +315,18 @@ module {
     };
     let nakGain = minus(nakNow, nakBaseline);
     let icpBack = minus(icpNow, icpBaseline);
+
+    // Sanity bounds: more NAK than the pool quoted (plus 2%), or more ICP back than was
+    // deposited, means something else landed in main mid-swap (e.g. a delayed pool withdraw
+    // belonging to an earlier order). Don't guess whose it is.
+    if (nakGain > quoteOut + quoteOut / 50 or icpBack > deposited) {
+      setStatus(
+        order,
+        active,
+        #needsReview("balances moved more than this swap explains (NAK +" # nakGain.toText() # ", ICP +" # icpBack.toText() # "): " # note),
+      );
+      return;
+    };
 
     if (nakGain > cfg.nakFee) {
       // Swap went through: the fee is the ICP that stayed behind in main.
@@ -386,6 +414,7 @@ module {
   func payout(
     state : Types.RouterState,
     active : Set.Set<Nat>,
+    self : Principal,
     order : Order,
     p : { icpIn : Nat; nakAmount : Nat; createdAtTime : Nat64 },
   ) : async* () {
@@ -396,7 +425,7 @@ module {
         to = { owner = order.recipient; subaccount = null };
         amount = p.nakAmount;
         fee = ?cfg.nakFee;
-        memo = null; // no order number on chain: nothing ties this transfer to an order
+        memo = ?Account.orderMemo(self, order.subaccount);
         created_at_time = ?p.createdAtTime;
       });
     } catch (_) { return };
@@ -408,13 +437,19 @@ module {
         // Dedup window passed without a recorded success; a human must check the ledger.
         setStatus(order, active, #needsReview("payout TooOld; verify on NAK ledger before resending"));
       };
-      case (#Err _) {};
+      case (#Err _) {
+        // The ledger refused it (nothing moved). Retry for an hour, then stop and flag it.
+        if (failingTooLong(p.createdAtTime)) {
+          setStatus(order, active, #needsReview("payout rejected by the NAK ledger for an hour; nothing was sent"));
+        };
+      };
     };
   };
 
   func refund(
     state : Types.RouterState,
     active : Set.Set<Nat>,
+    self : Principal,
     order : Order,
     r : {
       icpAmount : Nat;
@@ -430,7 +465,7 @@ module {
         to = { owner = order.refundTo; subaccount = null };
         amount = r.icpAmount;
         fee = ?cfg.icpFee;
-        memo = null; // no order number on chain: nothing ties this transfer to an order
+        memo = ?Account.orderMemo(self, order.subaccount);
         created_at_time = ?r.createdAtTime;
       });
     } catch (_) { return };
@@ -441,7 +476,11 @@ module {
       case (#Err(#TooOld)) {
         setStatus(order, active, #needsReview("refund TooOld; verify on ICP ledger before resending"));
       };
-      case (#Err _) {};
+      case (#Err _) {
+        if (failingTooLong(r.createdAtTime)) {
+          setStatus(order, active, #needsReview("refund rejected by the ICP ledger for an hour; nothing was sent"));
+        };
+      };
     };
   };
 

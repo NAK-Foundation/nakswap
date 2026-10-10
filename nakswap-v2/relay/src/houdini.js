@@ -18,7 +18,8 @@ export class HoudiniError extends Error {
   constructor(status, body) {
     // Houdini returns { code, message }; show its message rather than the raw JSON.
     const msg = body && typeof body === 'object' && body.message ? body.message : typeof body === 'string' ? body : JSON.stringify(body);
-    super(`Houdini: ${msg}`);
+    super(`Houdini: ${String(msg).slice(0, 300)}`);
+    this.expose = true; // Houdini's own wording (minimums, limits) is meant for the user
     this.code = body?.code;
     this.status = status;
     this.body = body;
@@ -51,6 +52,7 @@ export function createHoudini({ apiKey, apiSecret, fetchImpl = fetch, base = BAS
         'x-user-timezone': user?.timezone || 'UTC',
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15_000), // a hung Houdini call must not pin the request
     });
     const text = await res.text();
     let data;

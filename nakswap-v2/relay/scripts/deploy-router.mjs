@@ -152,6 +152,8 @@ const managementFor = (canisterId) =>
           [],
           [],
         ),
+        stop_canister: IDL.Func([IDL.Record({ canister_id: IDL.Principal })], [], []),
+        start_canister: IDL.Func([IDL.Record({ canister_id: IDL.Principal })], [], []),
       }),
     { agent, canisterId: Principal.fromText('aaaaa-aa'), effectiveCanisterId: canisterId },
   );
@@ -253,13 +255,28 @@ if (dryRun) {
 
 const mode =
   env.MODE === 'upgrade' ? { upgrade: [{ skip_pre_upgrade: [], wasm_memory_persistence: [{ keep: null }] }] } : { install: null };
-await managementFor(canisterId).install_code({
-  mode,
-  canister_id: canisterId,
-  wasm_module: Uint8Array.from(wasm),
-  arg: env.MODE === 'upgrade' ? new Uint8Array(IDL.encode([Config, IDL.Nat], [config, tickSeconds])) : initArg,
-  sender_canister_version: [],
-});
+const mgmt = managementFor(canisterId);
+// Upgrades stop the canister first: the IC lets in-flight calls (a swap waiting on ICPSwap,
+// a payout waiting on the ledger) finish before the code is swapped, so nothing is cut off
+// half-way. It is started again even if the install fails.
+if (env.MODE === 'upgrade') {
+  console.log('stopping (waits for in-flight calls)...');
+  await mgmt.stop_canister({ canister_id: canisterId });
+}
+try {
+  await mgmt.install_code({
+    mode,
+    canister_id: canisterId,
+    wasm_module: Uint8Array.from(wasm),
+    arg: env.MODE === 'upgrade' ? new Uint8Array(IDL.encode([Config, IDL.Nat], [config, tickSeconds])) : initArg,
+    sender_canister_version: [],
+  });
+} finally {
+  if (env.MODE === 'upgrade') {
+    await mgmt.start_canister({ canister_id: canisterId });
+    console.log('started');
+  }
+}
 console.log('installed', env.MODE || 'install');
 
 const router = Actor.createActor(routerIdl, { agent, canisterId });

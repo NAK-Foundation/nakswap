@@ -75,6 +75,13 @@ mixin (
   // worker covers everything else. Not public: every poke can cost a ledger call.
   public shared ({ caller }) func poke(id : Nat) : async Types.PokeResult {
     if (not Orders.isOperator(state.config, caller)) { return #notAuthorized };
+    // The relay may nudge an order at most every 5 s (the admin isn't throttled).
+    if (not Orders.isAdmin(state.config, caller)) {
+      switch (orders.get(id)) {
+        case (?o) { if (Time.now() - o.lastCheckedAt < 5_000_000_000) { return #tooSoon } };
+        case null {};
+      };
+    };
     await* Engine.step(state, fees, orders, active, self, id);
   };
 };

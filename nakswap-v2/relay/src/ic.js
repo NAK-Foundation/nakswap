@@ -143,7 +143,7 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
                 : why === 'tooManyOpenOrders'
                   ? 'NAKSwap has too many swaps in progress right now. Nothing was sent; try again in a few minutes.'
                   : `The router refused the order (${why}).`;
-        throw Object.assign(new Error(msg), { status: why === 'paused' || why === 'tooManyOpenOrders' ? 503 : 400 });
+        throw Object.assign(new Error(msg), { status: why === 'paused' || why === 'tooManyOpenOrders' ? 503 : 400, expose: true });
       }
       return r.ok;
     },

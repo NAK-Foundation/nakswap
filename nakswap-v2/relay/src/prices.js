@@ -7,7 +7,7 @@ const NAK = 'eig2s-waaaa-aaaam-qbg5a-cai';
 export function createPrices({ fetchImpl = fetch, intervalMs = 5 * 60_000 } = {}) {
   const state = { icpUsd: null, nakUsd: null, at: null };
   async function load(ledger) {
-    const res = await fetchImpl(URL_FOR(ledger), { headers: { accept: 'application/json' } });
+    const res = await fetchImpl(URL_FOR(ledger), { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
     const body = await res.json();
     const p = Number(body?.data?.price);
     return Number.isFinite(p) && p > 0 ? p : null;

@@ -151,7 +151,28 @@ Cycle safeguards (`src/router/lib/Guard.mo`):
   canister with its state intact instead of deleting it. Top up from the NNS app (Canisters tab)
   or any cycles wallet and it resumes on its own.
 
-Upgrades: `MODE=upgrade CANISTER_ID=bkyfl-uyaaa-aaaab-qhl5q-cai` with `scripts/deploy-router.mjs`.
+Upgrades: `MODE=upgrade CANISTER_ID=bkyfl-uyaaa-aaaab-qhl5q-cai` with `scripts/deploy-router.mjs`. The
+script stops the canister first (in-flight swaps and payouts finish), installs, and starts it again.
+
+### Resolving an order in "needs review"
+
+The router parks an order in `needsReview` whenever it can't be sure whose money is where:
+balances moved more than the swap explains, ICPSwap kept the funds, or a ledger kept refusing a
+payout for an hour. Nothing is paid automatically after that; the admin decides.
+
+```bash
+node scripts/router-admin.mjs orders                      # find it and read the reason
+node scripts/router-admin.mjs pool-unused                 # did ICPSwap keep anything for us?
+node scripts/router-admin.mjs pool-withdraw icp 1.25      # pull it back to the router (or nak)
+node scripts/router-admin.mjs force-payout <id> <NAK>     # pay the user NAK from the router
+node scripts/router-admin.mjs force-refund <id> <ICP> main|deposit   # or refund ICP instead
+node scripts/router-admin.mjs recover <id> <principal>    # ICP in a finished/deleted order's deposit account
+```
+
+Guards: `force-refund` from main can't touch the fees owed to the fee wallet and is capped by
+what's there; from a deposit it's capped by the deposit; it's refused when a NAK payout may
+already have gone out ("payout …" reasons: check the NAK ledger first). `force-payout` is capped
+by the router's NAK balance.
 
 ## User privacy
 
@@ -185,7 +206,15 @@ Router (`src/router/main.mo`, `lib/Guard.mo`):
 - At most 150 open orders. The worker pays out and refunds first, then checks each waiting
   deposit at most once a minute, least recently checked first, 10 per tick.
 - Orders the relay never paired with a Houdini exchange are deleted after 15 minutes.
-- `setConfig` rejects out-of-range values and can't change the ledgers or the pool;
+- Balance sanity check after every swap: more NAK than quoted (+2%) or more ICP back than
+  deposited parks the order for review instead of paying someone else's funds.
+- Approvals to the pool expire after 5 minutes; payouts/refunds carry a per-order memo so two
+  identical transfers are never deduplicated into one; a payout the ledger keeps rejecting is
+  parked after an hour instead of retrying forever.
+- An order interrupted mid-swap stays visible to the worker and is parked for review.
+- The relay may poke an order at most every 5 s.
+- `setConfig` rejects out-of-range values and can't change the ledgers, the pool, the ledger
+  fees, or make the router its own admin/operator/fee wallet;
   `attachHoudini` is set-once; the router can't be its own recipient.
 
 Relay (`relay/src/app.js`, `server.js`):
@@ -194,5 +223,14 @@ Relay (`relay/src/app.js`, `server.js`):
   the Houdini quota. Limiter memory is bounded.
 - Order links are `id-key`, where the key is an HMAC of the id under the relay seed; without
   the key `/api/orders/:id` answers 404. One router poke per order per 15 s.
-- Input validation on every field, JSON only, 8 KB body cap, header/request timeouts,
-  no CORS, CSP + frame/sniffing/referrer headers.
+- Input validation on every field (strings only, plain decimal amounts), JSON only, 8 KB body
+  cap, header/request timeouts, 15 s timeouts on outbound calls, no CORS, CSP that allows only
+  the page's own script (by hash) and Houdini's token icons, frame/sniffing/referrer headers.
+- Orders only against quotes the relay issued in the last 3 minutes, one order per quote, never
+  on a route marked unavailable. The relay sets the order's guaranteed minimum NAK (quote −6%);
+  below that the router refunds ICP instead of filling.
+- Houdini's exchange must be ICP paid to this order's deposit account, and the router must
+  confirm the pairing, before the user is shown a deposit address.
+- A malformed request can't crash the process; internal error text never reaches visitors;
+  mock Houdini refuses to start against mainnet. Optional `ORDER_KEY_SECRET` separates order
+  links from the operator key.

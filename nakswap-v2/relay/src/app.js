@@ -19,13 +19,25 @@ const MIME = {
 
 // Sent with every response. The page's own script and styles are inline, fonts come from
 // Google Fonts and token icons from Houdini's CDN; nothing may frame the page.
+// The page's one inline script is allowed by its hash (computed at startup), so an injected
+// script tag would not run even if some text were ever left unescaped.
+const SCRIPT_HASH = (() => {
+  try {
+    const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
+    const m = html.match(/<script>([\s\S]*?)<\/script>/);
+    return m ? `'sha256-${crypto.createHash('sha256').update(m[1], 'utf8').digest('base64')}'` : "'none'";
+  } catch {
+    return "'none'";
+  }
+})();
+
 const SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
+    `script-src 'self' ${SCRIPT_HASH}`,
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
-    "img-src 'self' https: data:",
+    "img-src 'self' data: https://api.houdiniswap.com",
     "connect-src 'self'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
@@ -69,9 +81,10 @@ const readBody = (req) =>
     });
     req.on('end', () => {
       try {
-        resolve(data ? JSON.parse(data) : {});
+        const v = data ? JSON.parse(data) : {};
+        resolve(v && typeof v === 'object' && !Array.isArray(v) ? v : {});
       } catch {
-        reject(new Error('invalid JSON'));
+        reject(Object.assign(new Error('invalid JSON'), { status: 400 }));
       }
     });
   });
@@ -83,8 +96,10 @@ function userContext(req) {
   const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
   const ip = (typeof real === 'string' && real.trim()) || fwd[fwd.length - 1] || req.socket?.remoteAddress || '0.0.0.0';
   const tz = String(req.headers['x-user-timezone'] || 'UTC');
+  // IPv6 clients usually control a whole /64, so limit per /64 rather than per address.
+  const key = ip.includes(':') && !ip.includes('.') ? `${ip.split(':').slice(0, 4).join(':')}::/64` : ip;
   return {
-    ip: ip.slice(0, 64),
+    ip: key.slice(0, 64),
     agent: String(req.headers['user-agent'] || 'unknown').slice(0, 256),
     timezone: /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(tz) ? tz : 'UTC',
   };
@@ -94,6 +109,17 @@ function userContext(req) {
 // or the router.
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const ADDR_RE = /^[A-Za-z0-9:._-]{1,128}$/;
+const AMOUNT_RE = /^\d{1,15}(\.\d{1,18})?$/;
+const KEY_RE = /^[0-9a-f]{20}$/;
+const str = (v) => (typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : null);
+
+// Houdini quotes the relay handed out, so orders can only be placed against a real, current,
+// unblocked quote — and the relay, not the browser, decides the minimum NAK to protect.
+const QUOTE_TTL_MS = 3 * 60_000;
+// Guaranteed minimum = quoted NAK minus this much. Covers Houdini delivering a little less
+// ICP than estimated plus normal price drift during the 5–45 min Houdini leg; anything
+// worse (e.g. someone pushing the price just before the router buys) is refunded in ICP.
+const MIN_OUT_TOLERANCE_BPS = 600n;
 
 // Small fixed-window limiter (each order costs a canister call and a Houdini exchange).
 // Old windows are dropped as it goes, so a flood of addresses can't grow it without bound.
@@ -128,7 +154,9 @@ function serveStatic(req, res, pathname) {
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
     'Cache-Control': rel === 'index.html' ? 'no-cache' : 'public, max-age=300',
   });
-  fs.createReadStream(file).pipe(res);
+  fs.createReadStream(file)
+    .on('error', () => res.destroy())
+    .pipe(res);
   return true;
 }
 
@@ -158,7 +186,8 @@ export function createApp({
   const allowQuote = limiter(30, 60_000);
   const allowView = limiter(120, 60_000);
   const allowTokens = limiter(60, 60_000);
-  const quoteCache = new Map(); // fromId|amount|refund -> { at, result }
+  const quoteCache = new Map(); // ip|fromId|amount|refund -> { at, result }
+  const issued = new Map(); // quoteId -> { at, blocked, nakOut }
   const houdiniCache = new Map(); // houdiniId -> { at, h }
   const lastPoke = new Map(); // order id -> ms
   let tokenCache = { at: 0, term: null, tokens: [] };
@@ -183,14 +212,17 @@ export function createApp({
 
   async function quote(body, user) {
     const cfg = ic.config;
-    const { fromId, amount, refundAddress } = body;
-    if (!fromId || !(Number(amount) > 0)) return [400, { error: 'fromId and a positive amount are required' }];
-    if (!ID_RE.test(String(fromId)) || !(Number(amount) < 1e15) || String(amount).length > 40) return [400, { error: 'invalid token or amount' }];
-    if (refundAddress && !ADDR_RE.test(String(refundAddress))) return [400, { error: 'invalid refund address' }];
+    const fromId = str(body.fromId);
+    const amount = str(body.amount);
+    const refundAddress = body.refundAddress == null || body.refundAddress === '' ? '' : str(body.refundAddress);
+    if (!fromId || !amount || !(Number(amount) > 0)) return [400, { error: 'fromId and a positive amount are required' }];
+    if (!ID_RE.test(fromId) || !AMOUNT_RE.test(amount)) return [400, { error: 'invalid token or amount' }];
+    if (refundAddress === null || (refundAddress && !ADDR_RE.test(refundAddress))) return [400, { error: 'invalid refund address' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
     // Same token + amount within a few seconds (typing, re-renders): reuse the last answer
     // instead of spending another Houdini quote request.
-    const qKey = `${fromId}|${Number(amount)}|${refundAddress || ''}`;
+    // Per visitor: quote ids are never handed to two different people.
+    const qKey = `${user.ip}|${fromId}|${amount}|${refundAddress}`;
     const cached = quoteCache.get(qKey);
     if (cached && Date.now() - cached.at < quoteCacheMs) return [200, cached.result];
     for (const [k, v] of quoteCache) if (Date.now() - v.at >= quoteCacheMs) quoteCache.delete(k);
@@ -240,6 +272,7 @@ export function createApp({
         nakswapFeeIcp: p.nakswapFee,
         nakOut: p.nakOut,
         minNakOut: p.minNakOut,
+        guaranteedNak: (p.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n,
         impactBps: p.impactBps,
         requiresRefundAddress: Boolean(q.requiresRefundAddress),
         amountInUsd: q.amountInUsd ?? null,
@@ -257,15 +290,20 @@ export function createApp({
       router: { ready: Boolean(ic.routerId), slippageBps: cfg.slippageBps, maxImpactBps: cfg.maxImpactBps },
     };
     quoteCache.set(qKey, { at: Date.now(), result });
+    for (const [k, v] of issued) if (Date.now() - v.at > QUOTE_TTL_MS) issued.delete(k);
+    if (issued.size > 20_000) issued.clear();
+    for (const r of routes) issued.set(String(r.quoteId), { at: Date.now(), blocked: r.blocked, nakOut: BigInt(r.nakOut) });
     return [200, result];
   }
 
   async function createOrder(body, user) {
-    const { quoteId, recipient, refundAddress, refundTo, minNakOut } = body;
+    const quoteId = str(body.quoteId);
+    const recipient = str(body.recipient);
+    const refundTo = body.refundTo == null || body.refundTo === '' ? null : str(body.refundTo);
+    const refundAddress = body.refundAddress == null || body.refundAddress === '' ? '' : str(body.refundAddress);
     if (!quoteId) return [400, { error: 'quoteId is required' }];
-    if (!ID_RE.test(String(quoteId))) return [400, { error: 'invalid quoteId' }];
-    if (refundAddress && !ADDR_RE.test(String(refundAddress))) return [400, { error: 'invalid refund address' }];
-    if (minNakOut != null && !/^\d{1,30}$/.test(String(minNakOut))) return [400, { error: 'invalid minNakOut' }];
+    if (!ID_RE.test(quoteId)) return [400, { error: 'invalid quoteId' }];
+    if (refundAddress === null || (refundAddress && !ADDR_RE.test(refundAddress))) return [400, { error: 'invalid refund address' }];
     let recipientP, refundToP;
     try {
       recipientP = ic.parsePrincipal(recipient);
@@ -274,13 +312,18 @@ export function createApp({
       return [400, { error: `invalid principal: ${e.message}` }];
     }
     if (!allowOrder(user.ip)) return [429, { error: 'Too many orders from your connection. Wait a few minutes and try again.' }];
+    const q = issued.get(quoteId);
+    if (!q || Date.now() - q.at > QUOTE_TTL_MS) return [409, { error: 'That quote has expired. Get a fresh quote and try again.' }];
+    if (q.blocked) return [400, { error: `That route can't be used: ${q.blocked}.` }];
     if (!allowOrderGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a little while.' }];
+    issued.delete(quoteId); // one order per quote
+    const minNakOut = (q.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n;
 
     // 1. Router order first: it mints the deposit account Houdini will pay into.
     const order = await ic.createOrder({
       recipient: recipientP,
       refundTo: refundToP,
-      minNakOut: minNakOut ? BigInt(minNakOut) : null,
+      minNakOut: minNakOut > 0n ? minNakOut : null,
     });
     // 2. Houdini exchange paying ICP to that account.
     let ex;
@@ -293,10 +336,23 @@ export function createApp({
       });
     } catch (e) {
       log('houdini createExchange failed', { order: order.id.toString(), status: e.status ?? null });
-      throw Object.assign(new Error(`Houdini did not accept the order: ${e.message}`), { status: e.status === 422 ? 422 : 502 });
+      throw Object.assign(new Error(`Houdini did not accept the order: ${e.message}`), { status: e.status === 422 ? 422 : 502, expose: true });
     }
-    // 3. Link them so support can trace either side.
-    await ic.attachHoudini(order.id, ex.houdiniId);
+    // Don't show a deposit address unless Houdini's exchange is the one we asked for: ICP,
+    // paid to this order's deposit account. If not, the user is never told where to send,
+    // and the unpaired router order is cleaned up after 15 minutes.
+    const norm = (x) => String(x ?? '').trim().toLowerCase().replace(/^0x/, '');
+    const fail = (why) => {
+      log('houdini exchange rejected', { order: order.id.toString(), why });
+      return Object.assign(new Error('Houdini returned an unexpected exchange, so nothing was set up. Please get a new quote and try again.'), { status: 502, expose: true });
+    };
+    if (!ex || !ex.houdiniId || !ex.depositAddress) throw fail('incomplete response');
+    if (ex.receiverAddress != null && norm(ex.receiverAddress) !== norm(order.depositAccountId)) throw fail('destination mismatch');
+    if (ex.outSymbol != null && String(ex.outSymbol).toUpperCase() !== 'ICP') throw fail('output is not ICP');
+    // 3. Link them so support can trace either side. If that fails, the router would treat
+    // the order as unpaired and clean it up, so don't hand out the deposit address.
+    const attached = await ic.attachHoudini(order.id, String(ex.houdiniId));
+    if (attached !== true) throw fail('attach failed');
     // Privacy: logs keep only the order number; no principals, addresses, amounts or IPs.
     log('order', { id: order.id.toString() });
     return [
@@ -314,6 +370,7 @@ export function createApp({
           expires: ex.expires,
         },
         expectedIcp: ex.outAmount,
+        guaranteedNak: minNakOut,
         icpDepositAccount: order.depositAccountId,
         nakRecipient: recipientP.toText(),
         rerouted: ex.rerouted ?? false,
@@ -323,7 +380,8 @@ export function createApp({
 
   async function getOrder(id, key, user) {
     if (!allowView(user.ip)) return [429, { error: 'too many requests, slow down' }];
-    if (id.length > 20 || !crypto.timingSafeEqual(Buffer.from(String(key || '').padEnd(20).slice(0, 20)), Buffer.from(orderKey(secret, id)))) {
+    const given = typeof key === 'string' ? key : '';
+    if (id.length > 20 || !KEY_RE.test(given) || !crypto.timingSafeEqual(Buffer.from(given, 'hex'), Buffer.from(orderKey(secret, id), 'hex'))) {
       return [404, { error: 'order not found. Use the full order code, e.g. 12-ab34…' }];
     }
     const order = await ic.getOrder(BigInt(id));
@@ -380,7 +438,12 @@ export function createApp({
   }
 
   return async function handle(req, res) {
-    const url = new URL(req.url, 'http://relay');
+    let url;
+    try {
+      url = new URL(req.url, 'http://relay');
+    } catch {
+      return json(res, 400, { error: 'bad request' });
+    }
     const user = userContext(req);
     try {
       if (req.method === 'OPTIONS') {
@@ -409,7 +472,7 @@ export function createApp({
           houdiniReady: houdini.ready !== false,
           router: ic.routerId,
           routerReady: Boolean(ic.routerId),
-          routerError: ic.routerError,
+          routerError: ic.routerError ? 'router unreachable' : null,
           operator: ic.principal,
           limits: {
             minOrderIcp: Number(cfg.minOrderIcp) / 1e8,
@@ -443,7 +506,10 @@ export function createApp({
     } catch (e) {
       // Error text can echo addresses or principals back; mask anything that looks like one.
       log('error', String(e.message).replace(/[A-Za-z0-9-]{20,}/g, '…').slice(0, 200));
-      return json(res, e.status && e.status < 500 ? e.status : e.status === 503 ? 503 : 502, { error: e.message });
+      const code = e.status && e.status < 500 ? e.status : e.status === 503 ? 503 : 502;
+      // Messages written for users (ours, Houdini's) go through; raw internal errors don't.
+      const msg = e.expose || code < 500 ? e.message : 'Something went wrong on our side. Nothing was sent; please try again.';
+      return json(res, code, { error: msg });
     }
   };
 }

@@ -71,6 +71,8 @@ module {
     amountOutMinimum : Text;
   };
 
+  public type WithdrawArgs = { amount : Nat; fee : Nat; token : Text };
+
   public type DepositAndSwapArgs = {
     amountIn : Text;
     zeroForOne : Bool;
@@ -82,5 +84,7 @@ module {
   public type SwapPool = actor {
     quote : shared query (SwapArgs) -> async { #ok : Nat; #err : PoolError };
     depositFromAndSwap : shared (DepositAndSwapArgs) -> async { #ok : Nat; #err : PoolError };
+    getUserUnusedBalance : shared query Principal -> async { #ok : { balance0 : Nat; balance1 : Nat }; #err : PoolError };
+    withdraw : shared WithdrawArgs -> async { #ok : Nat; #err : PoolError };
   };
 };

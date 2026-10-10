@@ -9,6 +9,11 @@
 //   ... set-fee 1 <principal>         (fee in %, max 5; wallet that receives it)
 //   ... sweep-fees                    (send accrued fees now instead of waiting for 0.05 ICP)
 //   ... recover <orderId> <principal> (ICP stranded in a finished or deleted order's deposit account)
+//   ... orders [fromId]               (list orders with their status)
+//   ... pool-unused                   (ICP / NAK ICPSwap holds for the router after a failed withdraw)
+//   ... pool-withdraw icp|nak <amount>  (pull it back into the router's main account)
+//   ... force-refund <id> <icp> main|deposit   (resolve a needs-review order with an ICP refund)
+//   ... force-payout <id> <nak>       (resolve a needs-review order by paying NAK from main)
 //
 // Use CONTROLLER_SEED=<64 hex> instead of CONTROLLER_PEM if you have the raw seed.
 import crypto from 'node:crypto';
@@ -69,6 +74,8 @@ const healthIdl = ({ IDL }) =>
     setFee: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Bool], []),
     sweepFees: IDL.Func([], [IDL.Nat], []),
     recoverDeposit: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
+    poolUnusedBalance: IDL.Func([], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
+    withdrawFromPool: IDL.Func([IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
     setConfig: IDL.Func([routerIdl({ IDL })._fields.find(([n]) => n === 'getConfig')[1].retTypes[0]], [IDL.Bool], []),
     setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
   });
@@ -144,6 +151,19 @@ if (cmd === 'health') {
 } else if (cmd === 'recover') {
   const r = await router.recoverDeposit(BigInt(a), Principal.fromText(b));
   console.log('ok' in r ? `recovered ${Number(r.ok) / 1e8} ICP to ${b}` : `not recovered: ${r.err}`);
+} else if (cmd === 'orders') {
+  console.log(show(await router.listOrders(BigInt(a || 0), 100n)));
+} else if (cmd === 'pool-unused') {
+  const r = await router.poolUnusedBalance();
+  console.log('ok' in r ? `ICPSwap holds for the router: ${Number(r.ok.icp) / 1e8} ICP, ${Number(r.ok.nak) / 1e8} NAK` : r.err);
+} else if (cmd === 'pool-withdraw') {
+  const r = await router.withdrawFromPool(a === 'icp', BigInt(Math.round(Number(b) * 1e8)));
+  console.log('ok' in r ? `withdrew ${Number(r.ok) / 1e8} ${a.toUpperCase()} into the router's main account` : `failed: ${r.err}`);
+} else if (cmd === 'force-refund') {
+  const [, , , id, amt, from] = process.argv;
+  console.log(show(await router.forceRefund(BigInt(id), BigInt(Math.round(Number(amt) * 1e8)), from === 'deposit')));
+} else if (cmd === 'force-payout') {
+  console.log(show(await router.forcePayout(BigInt(a), BigInt(Math.round(Number(b) * 1e8)))));
 } else if (cmd === 'freezing-days') {
   await mgmt.update_settings({
     canister_id: ROUTER,
@@ -152,6 +172,6 @@ if (cmd === 'health') {
   });
   console.log('freezing threshold set to', a, 'days');
 } else {
-  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | set <field> <value> | pause | unpause | freezing-days <n>');
+  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | set <field> <value> | pause | unpause | freezing-days <n>');
   console.log('fields:', Object.keys(FIELDS).join(', '));
 }

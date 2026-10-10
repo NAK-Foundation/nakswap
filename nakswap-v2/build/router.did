@@ -34,14 +34,16 @@ type Router =
  service {
    activeOrderIds: () -> (vec nat) query;
    attachHoudini: (id: nat, houdiniId: text) -> (bool);
-   createOrder: (args: CreateOrderArgs) -> (Result_1);
+   createOrder: (args: CreateOrderArgs) -> (Result_2);
    feeStatus: () -> (FeeStatus) query;
+   forcePayout: (id: nat, nakAmount: nat) -> (opt Status);
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
    getConfig: () -> (Config) query;
    getOrder: (id: nat) -> (opt OrderView) query;
    health: () -> (Health) query;
    listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
    poke: (id: nat) -> (PokeResult);
+   poolUnusedBalance: () -> (Result_1);
    recoverDeposit: (id: nat, to: principal) -> (Result);
    reopen: (id: nat) -> (opt Status);
    resolveStuckFees: (delivered: bool) -> (bool);
@@ -49,11 +51,20 @@ type Router =
    setFee: (bps: nat, to: principal) -> (bool);
    setPaused: (paused: bool) -> (bool);
    sweepFees: () -> (nat);
+   withdrawFromPool: (icpToken: bool, amount: nat) -> (Result);
  };
-type Result_1 = 
+type Result_2 = 
  variant {
    err: CreateOrderError;
    ok: OrderView;
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: record {
+         icp: nat;
+         nak: nat;
+       };
  };
 type Result = 
  variant {

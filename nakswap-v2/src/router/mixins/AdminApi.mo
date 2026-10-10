@@ -10,6 +10,8 @@ import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Account "../../common/Account";
 import Ext "../../common/Ext";
+import Error "mo:core/Error";
+import Text "mo:core/Text";
 import Engine "../lib/Engine";
 import Guard "../lib/Guard";
 import Orders "../lib/Orders";
@@ -31,6 +33,9 @@ mixin (
   func validConfig(c : Types.Config) : Bool {
     let cur = state.config;
     c.icpLedger == cur.icpLedger and c.nakLedger == cur.nakLedger and c.pool == cur.pool and c.icpIsToken0 == cur.icpIsToken0
+    // Ledger fees are set by the ledgers; changing them here would only break payouts.
+    and c.icpFee == cur.icpFee and c.nakFee == cur.nakFee
+    and c.admin != self and c.operators.all(func(p : Principal) : Bool = p != self)
     and not c.admin.isAnonymous() and c.operators.size() >= 1 and c.operators.size() <= 5
     and c.operators.all(func(p : Principal) : Bool = not p.isAnonymous())
     and c.icpFee > 0 and c.icpFee <= 1_000_000 and c.nakFee <= 100_000_000
@@ -67,31 +72,103 @@ mixin (
     };
   };
 
-  // Manual resolution for #needsReview: send `icpAmount` back to the order's refundTo,
-  // from its deposit subaccount or from the router's main account.
+  // Manual resolution for #needsReview / #expired: send `icpAmount` back to the order's
+  // refundTo, from its deposit subaccount or from the router's main account. Capped by what
+  // is actually there: a deposit refund by the deposit's balance, a main-account refund by
+  // main's ICP minus the fees that belong to the fee wallet. Refused when a NAK payout may
+  // already have gone out (check the NAK ledger, then use forcePayout or nothing).
   public shared ({ caller }) func forceRefund(id : Nat, icpAmount : Nat, fromDeposit : Bool) : async ?Types.Status {
     if (not Orders.isAdmin(state.config, caller)) { return null };
-    if (icpAmount <= state.config.icpFee) { return null };
-    switch (orders.get(id)) {
-      case (?o) {
-        switch (o.status) {
-          case (#needsReview _ or #expired) {
-            Engine.setStatus(
-              o,
-              active,
-              #refundPending({
-                icpAmount;
-                fromDeposit;
-                reason = #admin;
-                createdAtTime = Int.abs(Time.now()).toNat64();
-              }),
-            );
-          };
-          case _ {};
-        };
-        ?o.status;
+    let cfg = state.config;
+    if (icpAmount <= cfg.icpFee) { return null };
+    let o = switch (orders.get(id)) { case (?o) { o }; case null { return null } };
+    if (not refundable(o.status)) { return ?o.status };
+    let ledger : Ext.Ledger = actor (cfg.icpLedger.toText());
+    if (fromDeposit) {
+      let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
+      if (icpAmount + cfg.icpFee > bal) { return ?o.status };
+    } else {
+      if (state.busy) { return ?o.status };
+      let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = null });
+      if (icpAmount + cfg.icpFee + fees.accrued > bal) { return ?o.status };
+    };
+    if (not refundable(o.status)) { return ?o.status }; // re-check after the await
+    Engine.setStatus(
+      o,
+      active,
+      #refundPending({
+        icpAmount;
+        fromDeposit;
+        reason = #admin;
+        createdAtTime = Int.abs(Time.now()).toNat64();
+      }),
+    );
+    ?o.status;
+  };
+
+  func refundable(s : Types.Status) : Bool {
+    switch s {
+      case (#expired) { true };
+      case (#needsReview r) { not r.startsWith(#text "payout") };
+      case _ { false };
+    };
+  };
+
+  // For a #needsReview order whose NAK is in the router's main account (e.g. a payout the
+  // ledger kept rejecting, or NAK withdrawn from the pool with withdrawFromPool): pay
+  // `nakAmount` to the order's recipient. Capped by main's NAK balance.
+  public shared ({ caller }) func forcePayout(id : Nat, nakAmount : Nat) : async ?Types.Status {
+    if (not Orders.isAdmin(state.config, caller)) { return null };
+    let cfg = state.config;
+    if (nakAmount == 0) { return null };
+    let o = switch (orders.get(id)) { case (?o) { o }; case null { return null } };
+    switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
+    if (state.busy) { return ?o.status };
+    let ledger : Ext.Ledger = actor (cfg.nakLedger.toText());
+    let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = null });
+    if (nakAmount + cfg.nakFee > bal) { return ?o.status };
+    switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
+    Engine.setStatus(o, active, #payoutPending({ icpIn = 0; nakAmount; createdAtTime = Int.abs(Time.now()).toNat64() }));
+    ?o.status;
+  };
+
+  // What ICPSwap holds for the router as "unused balance" (left behind by a failed withdraw).
+  public shared ({ caller }) func poolUnusedBalance() : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    let cfg = state.config;
+    let p : Ext.SwapPool = actor (cfg.pool.toText());
+    switch (await p.getUserUnusedBalance(self)) {
+      case (#ok b) {
+        #ok(if (cfg.icpIsToken0) { { icp = b.balance0; nak = b.balance1 } } else { { icp = b.balance1; nak = b.balance0 } });
       };
-      case null { null };
+      case (#err _) { #err("pool returned an error") };
+    };
+  };
+
+  // Pull unused balance out of the pool into the router's main account, under the swap lock
+  // so it can't land in the middle of another order's swap. Then resolve the order it
+  // belongs to with forcePayout / forceRefund.
+  public shared ({ caller }) func withdrawFromPool(icpToken : Bool, amount : Nat) : async Result.Result<Nat, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    if (state.busy) { return #err("a swap is running; try again in a minute") };
+    let cfg = state.config;
+    let p : Ext.SwapPool = actor (cfg.pool.toText());
+    state.busy := true;
+    try {
+      let r = await p.withdraw({
+        token = (if icpToken { cfg.icpLedger } else { cfg.nakLedger }).toText();
+        fee = if icpToken { cfg.icpFee } else { cfg.nakFee };
+        amount;
+      });
+      switch r {
+        case (#ok n) { #ok(n) };
+        case (#err(#InternalError m)) { #err(m) };
+        case (#err _) { #err("pool refused the withdraw") };
+      };
+    } catch (e) {
+      #err("pool call failed: " # e.message());
+    } finally {
+      state.busy := false;
     };
   };
 
@@ -178,7 +255,7 @@ mixin (
   // swaps that start after the call; a change of wallet applies from the next sweep.
   public shared ({ caller }) func setFee(bps : Nat, to : Principal) : async Bool {
     if (not Orders.isAdmin(state.config, caller)) { return false };
-    if (bps > Engine.feeMaxBps or to.isAnonymous()) { return false };
+    if (bps > Engine.feeMaxBps or to.isAnonymous() or to == self) { return false };
     fees.bps := bps;
     fees.to := to;
     true;

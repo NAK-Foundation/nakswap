@@ -9,6 +9,16 @@ const env = process.env;
 const host = env.IC_HOST || 'https://icp-api.io';
 const local = /127\.0\.0\.1|localhost/.test(host) || env.IC_LOCAL === '1';
 const mode = env.HOUDINI_MODE || (local ? 'mock' : 'live');
+if (mode === 'mock' && !local) {
+  // Mock Houdini shows fake deposit addresses and pays ICP from the relay identity: never
+  // against mainnet.
+  console.error('HOUDINI_MODE=mock is only allowed against a local replica. Refusing to start.');
+  process.exit(1);
+}
+
+// Last-resort guards: log and keep serving rather than exit on a stray rejection.
+process.on('unhandledRejection', (e) => console.error(new Date().toISOString(), 'unhandledRejection', String(e?.message || e).slice(0, 200)));
+process.on('uncaughtException', (e) => console.error(new Date().toISOString(), 'uncaughtException', String(e?.message || e).slice(0, 200)));
 
 if (!env.RELAY_IDENTITY_SEED) {
   console.warn('RELAY_IDENTITY_SEED is not set: using a throwaway identity. Its principal will not be a router operator.');
@@ -32,10 +42,18 @@ const houdini =
 
 const prices = createPrices();
 // Order-link keys are derived from the relay identity seed, so links survive restarts.
-const secret = env.RELAY_IDENTITY_SEED ? `nakswap-order-key:${env.RELAY_IDENTITY_SEED}` : undefined;
+// ORDER_KEY_SECRET, if set, keeps order links separate from the operator key (changing it
+// invalidates existing order links, so set it before launch and leave it).
+const secret = env.ORDER_KEY_SECRET || (env.RELAY_IDENTITY_SEED ? `nakswap-order-key:${env.RELAY_IDENTITY_SEED}` : undefined);
 const handle = createApp({ houdini, ic, prices, secret, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
-const server = http.createServer(handle);
+const server = http.createServer((req, res) =>
+  handle(req, res).catch((e) => {
+    console.error(new Date().toISOString(), 'handler error', String(e?.message || e).slice(0, 200));
+    if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end('{"error":"internal error"}');
+  }),
+);
 // Slow-client protection: drop connections that dribble headers or bodies.
 server.headersTimeout = 10_000;
 server.requestTimeout = 30_000;

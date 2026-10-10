@@ -251,6 +251,37 @@ actor Test {
     let s6 = await pokeUntilSettled(o6.id);
     check("needsReview (got " # statusTag(s6) # ")", statusTag(s6).startsWith(#text "needsReview"));
 
+    // ---- 6b. admin recovers it: pool unused balance -> main -> capped refund ----
+    Debug.print("6b. recover from the pool");
+    let unused = switch (await router.poolUnusedBalance()) { case (#ok b) { b.icp }; case (#err _) { 0 } };
+    check("pool holds the order's ICP as unused balance (" # unused.toText() # ")", unused > 0);
+    check("withdrawFromPool works", (await router.withdrawFromPool(true, unused)) == #ok(unused));
+    let mainIcp = await icp.icrc1_balance_of(routerMain);
+    let accrued6 = (await router.feeStatus()).accrued;
+    let refundable6 = mainIcp - accrued6 - icpFee : Nat;
+    check("forceRefund above what main can spare is refused", statusTag((await router.forceRefund(o6.id, refundable6 + 1, false)) ?? #expired).startsWith(#text "needsReview"));
+    check("forceRefund from an empty deposit is refused", statusTag((await router.forceRefund(o6.id, ICP / 2, true)) ?? #expired).startsWith(#text "needsReview"));
+    let aliceBefore = await icp.icrc1_balance_of({ owner = alice; subaccount = null });
+    check("capped forceRefund accepted", statusTag((await router.forceRefund(o6.id, refundable6, false)) ?? #expired) == "refundPending");
+    check("then refunded", statusTag(await pokeUntilSettled(o6.id)) == "refunded");
+    check("alice got the refund", (await icp.icrc1_balance_of({ owner = alice; subaccount = null })) == aliceBefore + refundable6);
+    check("fees left untouched in main", (await icp.icrc1_balance_of(routerMain)) == accrued6);
+
+    // ---- 6c. extra NAK lands mid-swap: flagged, not paid to the wrong person ----
+    Debug.print("6c. unexplained balance change");
+    let o6c = await newOrder(bob, null);
+    await houdiniPays(o6c.depositAccountId, ICP);
+    await pool.setBonusNextSwap(500_000 * NAK);
+    let s6c = await pokeUntilSettled(o6c.id);
+    check("needsReview instead of paying the extra (got " # statusTag(s6c) # ")", statusTag(s6c).startsWith(#text "needsReview(balances moved"));
+    let mainNak = await nak.icrc1_balance_of(routerMain);
+    check("forcePayout above main's NAK is refused", statusTag((await router.forcePayout(o6c.id, mainNak)) ?? #expired).startsWith(#text "needsReview"));
+    let bobNak0 = await nak.icrc1_balance_of({ owner = bob; subaccount = null });
+    let owed = mainNak - 500_000 * NAK - nakFee : Nat;
+    check("forcePayout of the order's share accepted", statusTag((await router.forcePayout(o6c.id, owed)) ?? #expired) == "payoutPending");
+    check("then completed", statusTag(await pokeUntilSettled(o6c.id)) == "completed");
+    check("bob got exactly his share", (await nak.icrc1_balance_of({ owner = bob; subaccount = null })) == bobNak0 + owed);
+
     // ---- 7. expiry: nothing paid within the TTL ----
     Debug.print("7. expiry");
     ignore await router.setConfig({ cfg with orderTtlSeconds = 0 });
@@ -295,6 +326,14 @@ actor Test {
     check("setConfig rejects min >= max", not (await router.setConfig({ cfg with minOrderIcp = 60 * ICP })));
     check("setConfig accepts sane values", await router.setConfig({ cfg with maxOrderIcp = 30 * ICP }));
     check("config kept the pool", (await router.getConfig()).pool == poolId);
+    check("setConfig cannot change ledger fees", not (await router.setConfig({ cfg with nakFee = 0 })));
+    check("setConfig cannot make the router its own admin", not (await router.setConfig({ cfg with admin = routerId })));
+    check("fee wallet cannot be the router", not (await router.setFee(100, routerId)));
+    ignore await router.setConfig({ cfg with maxOrderIcp = 30 * ICP; operators = [me, Principal.fromActor(stranger)] });
+    let o9b = await newOrder(alice, null);
+    ignore await stranger.tryPoke(routerId, o9b.id);
+    check("a non-admin operator is throttled", (await stranger.tryPoke(routerId, o9b.id)) == #tooSoon);
+    ignore await router.setConfig({ cfg with maxOrderIcp = 30 * ICP });
     var opened = 0;
     var capped = false;
     label spam while (opened < 200) {

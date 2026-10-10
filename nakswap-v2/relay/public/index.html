@@ -399,7 +399,8 @@
     return FORMATS[c] || (c === 'xlm' ? FORMATS.xlm : null);
   }
 
-  const DIRECT_ICP = { id: 'icp-direct', symbol: 'ICP', name: 'Internet Computer', chain: 'icp', chainName: 'Internet Computer', direct: true };
+  // The ICP logo is served by this site, so it shows even if Houdini's image host doesn't load.
+  const DIRECT_ICP = { id: 'icp-direct', symbol: 'ICP', name: 'Internet Computer', chain: 'icp', chainName: 'Internet Computer', icon: '/icp.svg', direct: true };
   let lastUnavailable = [];
   let health = null, token = null, routes = [], chosen = null, quotedAt = 0, quoteSeq = 0, pollTimer = null, lastQuoteErr = '', quoting = false;
 
@@ -457,7 +458,7 @@
       const usable = tokens.filter((t) => !(t.symbol === 'ICP' && t.chain === 'icp'));
       // ICP itself goes straight to the router (no Houdiniswap leg), pinned first.
       if (health?.routes?.icp !== false && (!term || /^(icp|internet)/i.test(term))) {
-        usable.unshift({ ...DIRECT_ICP, icon: icpTok?.icon || 'https://api.houdiniswap.com/assets/tokens/ICP-ICP.png', usd: icpTok?.usd ?? health?.prices?.icpUsd ?? null });
+        usable.unshift({ ...DIRECT_ICP, usd: icpTok?.usd ?? health?.prices?.icpUsd ?? null });
       }
       if (!usable.length) { list.innerHTML = '<div class="muted" style="padding:12px">No tokens match. Try a ticker like USDT, BTC or SOL.</div>'; return; }
       list.innerHTML = usable.map((t, i) => t.direct ? `
@@ -475,6 +476,8 @@
     }
   }
   function pickToken(t) {
+    // A pick saved on this device by an older version may carry no (or another) ICP icon.
+    if (t.direct) t = { ...t, icon: DIRECT_ICP.icon };
     const chainChanged = !token || token.chain !== t.chain || Boolean(token.direct) !== Boolean(t.direct);
     token = t;
     $('tokenIcon').innerHTML = iconHtml(t);

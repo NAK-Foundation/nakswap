@@ -90,6 +90,23 @@
   .stats b { display: block; font-family: var(--font-display); font-weight: 500; font-size: 24px; letter-spacing: .02em; line-height: 1.2; }
   .stats span { font-size: 12px; color: var(--nak-text-muted); }
   @media (max-width: 420px) { .stats div { padding: 10px; } .stats b { font-size: 19px; } }
+  /* OISY guide: a real sequence, so the steps are numbered. Same frame as the spec tables. */
+  .guide { border: 1px solid var(--nak-border); margin-bottom: 28px; scroll-margin-top: 88px; }
+  .guide-head { padding: 16px 14px; border-bottom: 1px solid var(--nak-border); }
+  .guide-head h2 { margin: 0 0 6px; }
+  .guide-head p { margin: 0; font-size: 15px; color: var(--nak-text-secondary); }
+  .guide ol { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .guide li { counter-increment: step; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 0 10px; padding: 14px; border-bottom: 1px solid var(--nak-border); font-size: 15px; }
+  .guide li::before { content: counter(step); font-family: var(--font-display); font-weight: 500; font-size: 22px; line-height: 1.1; color: var(--nak-accent); }
+  .guide li b { font-weight: 500; }
+  .guide li p { margin: 4px 0 0; color: var(--nak-text-secondary); font-size: 14px; }
+  .guide .ledger { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .guide .ledger code { font-family: var(--font-mono); font-size: 13px; padding: 4px 8px; background: var(--nak-surface-hi); border: 1px solid var(--nak-border); border-radius: var(--radius); word-break: break-all; }
+  .guide-foot { padding: 14px; font-size: 14px; color: var(--nak-text-secondary); }
+  .guide-foot h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; color: var(--nak-text); }
+  .guide-foot p { margin: 0 0 8px; }
+  .guide-foot p:last-child { margin-bottom: 0; }
+  .guide a, .help a { color: var(--nak-text); text-underline-offset: 2px; }
   h2 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; margin: 0 0 12px; }
 
   /* ---------- swap card ---------- */
@@ -222,6 +239,24 @@
       <tr><th scope="row">Router</th><td class="mono" style="font-size:13px">bkyfl-uyaaa-aaaab-qhl5q-cai</td></tr>
     </table>
 
+    <section class="guide" id="oisy" aria-labelledby="oisyTitle">
+      <div class="guide-head">
+        <h2 id="oisyTitle">New to ICP? Use OISY</h2>
+        <p>OISY is a free Internet Computer wallet that runs in your browser. Nothing to install and no seed phrase to write down: you sign in with Google, Apple, Microsoft or a passkey.</p>
+      </div>
+      <ol>
+        <li><div><b>Create your wallet</b><p>Go to <a href="https://oisy.com" target="_blank" rel="noopener">oisy.com</a>, choose Open or Create, and sign in. Your wallet is ready straight away.</p></div></li>
+        <li><div><b>Copy your principal</b><p>In OISY, open ICP and tap Receive, then copy the <b>ICP Principal</b> (it has dashes, like abcde-fghij-…). Paste it into “Where should NAK go?” on this page. Don’t use the ICP Account ID on that screen: it’s only for receiving ICP from exchanges. Your principal is also under Settings, as Your Principal.</p></div></li>
+        <li><div><b>Add NAK to your wallet</b><p>So your NAK shows up: in OISY go to Assets, then Manage List, then Import token. Pick Internet Computer, paste the NAK ledger ID, and add the token.</p>
+          <div class="ledger"><code id="nakLedger">eig2s-waaaa-aaaam-qbg5a-cai</code><button class="btn copy" type="button" data-copy="nakLedger">Copy ledger ID</button></div></div></li>
+      </ol>
+      <div class="guide-foot">
+        <h3>Already have ICP in OISY?</h3>
+        <p>Choose “ICP, pay directly” in the swap box, then in OISY open ICP, tap Send, and paste the ICP account ID from your order.</p>
+        <p>You can also swap ICP for NAK inside OISY: tap Swap, pay with ICP and receive NAK. OISY routes it through ICPSwap, the same NAK/ICP pool NAKSwap uses. No ICP yet? OISY’s Buy button gets you some with a card.</p>
+      </div>
+    </section>
+
     <h2>Before you swap</h2>
     <table class="spec" id="limits">
       <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap, or 0.1 ICP<small>Houdiniswap won't quote below $25. Private routes usually need more, often $40 or so; the quote tells you. Paying with ICP directly starts at 0.1 ICP.</small></td></tr>
@@ -276,7 +311,7 @@
           <label class="label" for="recipient">Where should NAK go?</label>
           <div class="box"><input id="recipient" class="addr-in" placeholder="Your ICP principal, e.g. abcde-fghij-…-xyz" autocomplete="off" spellcheck="false" aria-describedby="recipientHint"></div>
           <div class="hint" id="recipientHint" role="status"></div>
-          <div class="help">Use the principal of a wallet you control (NNS, Plug or Oisy). Don’t use an exchange account: exchanges can’t receive NAK and it may be lost. For more privacy, use a fresh wallet: NAK payouts are public on the ICP ledger like any transfer.</div>
+          <div class="help">Use the principal of a wallet you control. No ICP wallet yet? <a href="#oisy" id="oisyLink">Set up OISY in about a minute</a>. Don’t use an exchange account: exchanges can’t receive NAK and it may be lost. For more privacy, use a fresh wallet: NAK payouts are public on the ICP ledger like any transfer.</div>
         </div>
 
         <div class="block" id="refundBlock">

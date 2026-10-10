@@ -193,6 +193,10 @@
   .suggest:hover { border-color: var(--nak-text-muted); }
 
   footer { max-width: 1280px; margin: 0 auto; padding: 24px 16px 40px; border-top: 1px solid var(--nak-border); font-size: 13px; color: var(--nak-text-muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .nak-legal { flex-basis: 100%; padding-bottom: 16px; margin-bottom: 4px; border-bottom: 1px solid var(--nak-border); line-height: 1.6; }
+  .nak-legal h2 { margin: 0 0 8px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--nak-text, #e8eaed); }
+  .nak-legal p { margin: 0 0 8px; max-width: 72ch; }
+  .nak-legal p:last-child { margin-bottom: 0; }
 </style>
 </head>
 <body>
@@ -363,6 +367,12 @@
 </main>
 
 <footer>
+  <section class="nak-legal" aria-labelledby="nak-legal-heading">
+    <h2 id="nak-legal-heading">Legal Disclaimer</h2>
+    <p>NAK (New Age Kapital) is a nonprofit organization that holds the intellectual property behind its projects. Our mission is to advance the world by every lawful means available to us.</p>
+    <p>The NAK token is not an investment. It is not designed or intended to appreciate in value, and NAK makes no promise of profit, return, or yield of any kind. Nothing on this site is financial, investment, legal, or tax advice. All products and services are provided &ldquo;as is,&rdquo; without warranties of any kind, and you use them at your own risk.</p>
+    <p>&copy; 2026 NAK New Age Kapital. All rights reserved.</p>
+  </section>
   <span>NAKSwap by New Age Kapital. Keep your order number for support.</span>
   <span>Quotes from Houdiniswap and ICPSwap. Not financial advice.</span>
 </footer>

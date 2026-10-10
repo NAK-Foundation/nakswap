@@ -1,0 +1,22 @@
+{
+  "overview": "A sandbox-only cross-chain swap simulator that quotes a HoudiniSwap-style route into NAK and walks each order through a simulated deposit, swap and payout.",
+  "features": [
+    "Pick any of 21 cross-chain tokens and get a two-leg quote into NAK",
+    "Type your ICP principal as the NAK recipient, with validation",
+    "Choose Standard or Private routing with different fees and ETAs",
+    "Create an order and simulate sending the deposit",
+    "Watch a combined timeline from deposit to NAK delivery",
+    "Track any order by ID and see recent orders",
+    "Edit token prices, router config and sandbox balances in Test Controls",
+    "Reset the sandbox at any time"
+  ],
+  "category": "finance",
+  "tags": [
+    "crypto",
+    "swap",
+    "sandbox",
+    "simulator",
+    "defi"
+  ],
+  "last_updated": "2026-10-10T02:30:21.250Z"
+}

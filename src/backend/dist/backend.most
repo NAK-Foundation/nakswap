@@ -1,0 +1,357 @@
+// Version: 4.0.0
+type AccessControlState__201339279 =
+  {
+    var adminAssigned : Bool;
+    userRoles : Map__230067015<Principal, UserRole__91647283>
+  };
+type AccountId__1040643515 = AccountId__552256128;
+type AccountId__552256128 = Text;
+type Amount__460182544 = Nat;
+type Amount__646060322 = Amount__460182544;
+type BlockIndex__127626329 = BlockIndex__308252785;
+type BlockIndex__308252785 = Nat;
+type Bps__102973682 = Nat;
+type Bps__131576841 = Bps__102973682;
+type Config__496292921 =
+  {
+    maxImpactBps : Nat;
+    maxOrderIcp : Nat;
+    minOrderIcp : Nat;
+    operators : [Principal];
+    orderTtlSeconds : Nat;
+    paused : Bool;
+    slippageBps : Nat
+  };
+type Config__620056603 =
+  {
+    maxImpactBps : Nat;
+    maxOrderIcp : Nat;
+    minOrderIcp : Nat;
+    orderTtlSeconds : Nat;
+    paused : Bool;
+    slippageBps : Nat
+  };
+type Config__740071775 =
+  {
+    maxImpactBps : Bps__131576841;
+    maxOrderIcp : Amount__646060322;
+    minOrderIcp : Amount__646060322;
+    orderTtlSeconds : Nat;
+    paused : Bool;
+    slippageBps : Bps__131576841
+  };
+type Data__44217153<K, V> = {var count : Nat__227979830; kvs : [var ?(K, V)]};
+type HoudiniStatus__552671549 =
+  {
+    #anonymizing;
+    #completed;
+    #confirming;
+    #exchanging;
+    #expired;
+    #failed;
+    #refunded;
+    #waiting
+  };
+type HoudiniStatus__865664752 =
+  {
+    #anonymizing;
+    #completed;
+    #confirming;
+    #exchanging;
+    #expired;
+    #failed;
+    #refunded;
+    #waiting
+  };
+type Internal__283199666<K, V> =
+  {children : [var ?Node__204828119<K, V>]; data : Data__44217153<K, V>};
+type Leaf__598469445<K, V> = {data : Data__44217153<K, V>};
+type Map__230067015<K, V> = Map__405889023<K, V>;
+type Map__405889023<K, V> = Map__603270868<K, V>;
+type Map__603270868<K, V> =
+  {var root : Node__204828119<K, V>; var size : Nat__227979830};
+type Mode__600993006 = {#live; #sandbox};
+type Nat__227979830 = Nat__920180692;
+type Nat__920180692 = Nat;
+type NewActor__237791113 =
+  {
+    busy : {var locked : Bool};
+    config : {var value : Config__620056603};
+    icpUsdMicro : {var value : Nat};
+    nextOrderId : {var value : Nat};
+    orders : Map__230067015<Nat, Order__277910209>;
+    sandboxAccountOwners : Map__230067015<Text, Principal>;
+    sandboxIcpBalances : Map__230067015<Text, Nat>;
+    sandboxNakBalances : Map__230067015<Text, Nat>;
+    sandboxPool : {var value : PoolReserves__250829494};
+    sandboxRouterMain : {var value : PoolReserves__250829494};
+    testToggles : {var value : TestToggles__417491123};
+    tokens : Map__230067015<Text, Token__400207416>
+  };
+type NewActor__705149831 =
+  {
+    accessControlState : AccessControlState__201339279;
+    busy : {var locked : Bool};
+    config : {var value : Config__496292921};
+    mode : {var value : Mode__600993006};
+    nextOrderId : {var value : Nat};
+    orders : Map__230067015<Nat, Order__265354433>;
+    sandboxAccountOwners : Map__230067015<Text, Principal>;
+    sandboxIcpBalances : Map__230067015<Text, Nat>;
+    sandboxNakBalances : Map__230067015<Text, Nat>;
+    sandboxPool : {var value : PoolReserves__359225335};
+    sandboxRouterMain : {var value : PoolReserves__359225335};
+    testToggles : {var value : TestToggles__579933145}
+  };
+type Node__204828119<K, V> =
+  {#internal : Internal__283199666<K, V>; #leaf : Leaf__598469445<K, V>};
+type OldActor__291527786 =
+  {
+    accessControlState :
+      {
+        var adminAssigned : Bool;
+        userRoles : Map__230067015<Principal, {#admin; #guest; #user}>
+      };
+    busy : {var locked : Bool};
+    config : {var value : OldConfig__131952578};
+    mode : {var value : {#live; #sandbox}};
+    nextOrderId : {var value : Nat};
+    orders : Map__230067015<Nat, OldOrder__131611393>;
+    sandboxAccountOwners : Map__230067015<Text, Principal>;
+    sandboxIcpBalances : Map__230067015<Text, Nat>;
+    sandboxNakBalances : Map__230067015<Text, Nat>;
+    sandboxPool : {var value : OldPoolReserves__714358164};
+    sandboxRouterMain : {var value : OldPoolReserves__714358164};
+    testToggles : {var value : OldTestToggles__576044901}
+  };
+type OldActor__625272489 = {};
+type OldConfig__131952578 =
+  {
+    maxImpactBps : Nat;
+    maxOrderIcp : Nat;
+    minOrderIcp : Nat;
+    operators : [Principal];
+    orderTtlSeconds : Nat;
+    paused : Bool;
+    slippageBps : Nat
+  };
+type OldOrderStatus__1026879707 =
+  {
+    #awaitingDeposit;
+    #completed : {block : Nat; icpIn : Nat; nakOut : Nat};
+    #expired;
+    #needsReview : Text;
+    #payoutPending;
+    #refundPending;
+    #refunded :
+      {block : Nat; icpAmount : Nat; reason : OldRefundReason__492412036};
+    #swapping
+  };
+type OldOrder__131611393 =
+  {
+    block : ?Nat;
+    createdAt : Int;
+    depositAccountId : Text;
+    depositSubaccount : Blob;
+    icpIn : ?Nat;
+    id : Nat;
+    minNakOut : ?Nat;
+    nakOut : ?Nat;
+    owner : Principal;
+    quotedIcpIn : Nat;
+    recipient : Principal;
+    refundReason : ?OldRefundReason__492412036;
+    status : OldOrderStatus__1026879707;
+    updatedAt : Int
+  };
+type OldPoolReserves__714358164 = {icp : Nat; nak : Nat};
+type OldRefundReason__492412036 =
+  {
+    #admin;
+    #priceImpact : {bps : Nat};
+    #swapFailed : Text;
+    #tooLarge;
+    #tooSmall
+  };
+type OldTestToggles__576044901 =
+  {
+    failNextNakPayout : Bool;
+    forceSlippage : Bool;
+    poolWithdrawFailsNextSwap : Bool
+  };
+type OrderId__197865225 = Nat;
+type OrderId__997096394 = OrderId__197865225;
+type OrderStatus__288248656 =
+  {
+    #awaitingDeposit;
+    #completed : {block : Nat; icpIn : Nat; nakOut : Nat};
+    #expired;
+    #needsReview : Text;
+    #payoutPending;
+    #refundPending;
+    #refunded :
+      {block : Nat; icpAmount : Nat; reason : RefundReason__248806152};
+    #swapping
+  };
+type Order__265354433 =
+  {
+    block : ?Nat;
+    createdAt : Int;
+    depositAccountId : Text;
+    depositSubaccount : Blob;
+    icpIn : ?Nat;
+    id : Nat;
+    minNakOut : ?Nat;
+    nakOut : ?Nat;
+    owner : Principal;
+    quotedIcpIn : Nat;
+    recipient : Principal;
+    refundReason : ?RefundReason__248806152;
+    status : OrderStatus__288248656;
+    updatedAt : Int
+  };
+type Order__277910209 =
+  {
+    block : ?Nat;
+    createdAt : Int;
+    depositAccountId : Text;
+    depositAddress : Text;
+    depositSubaccount : Blob;
+    houdiniStatus : HoudiniStatus__552671549;
+    icpIn : ?Nat;
+    id : Nat;
+    nakOut : ?Nat;
+    recipient : Principal;
+    refundAddress : ?Text;
+    refundReason : ?RefundReason__897720688;
+    routeType : RouteType__473786413;
+    routerStatus : RouterStatus__747787671;
+    tokenAmount : Nat;
+    tokenChain : Text;
+    tokenSymbol : Text;
+    updatedAt : Int
+  };
+type Order__865812706 =
+  {
+    block : ?BlockIndex__127626329;
+    createdAt : Timestamp__212698360;
+    depositAccountId : AccountId__1040643515;
+    depositAddress : Text;
+    depositSubaccount : Blob;
+    houdiniStatus : HoudiniStatus__865664752;
+    icpIn : ?Amount__646060322;
+    id : OrderId__997096394;
+    nakOut : ?Amount__646060322;
+    recipient : Principal;
+    refundAddress : ?Text;
+    refundReason : ?RefundReason__91478621;
+    routeType : RouteType__111356168;
+    routerStatus : RouterStatus__582848661;
+    tokenAmount : Nat;
+    tokenChain : Text;
+    tokenSymbol : Text;
+    updatedAt : Timestamp__212698360
+  };
+type PoolReserves__250829494 = {icp : Nat; nak : Nat};
+type PoolReserves__359225335 = {icp : Nat; nak : Nat};
+type PoolReserves__869124590 =
+  {icp : Amount__646060322; nak : Amount__646060322};
+type RefundReason__248806152 =
+  {
+    #admin;
+    #priceImpact : {bps : Nat};
+    #swapFailed : Text;
+    #tooLarge;
+    #tooSmall
+  };
+type RefundReason__897720688 =
+  {
+    #admin;
+    #priceImpact : {bps : Nat};
+    #swapFailed : Text;
+    #tooLarge;
+    #tooSmall
+  };
+type RefundReason__91478621 =
+  {
+    #admin;
+    #priceImpact : {bps : Bps__131576841};
+    #swapFailed : Text;
+    #tooLarge;
+    #tooSmall
+  };
+type RouteType__111356168 = RouteType__593921128;
+type RouteType__473786413 = {#private_; #standard};
+type RouteType__593921128 = {#private_; #standard};
+type RouterStatus__582848661 =
+  {
+    #awaitingDeposit;
+    #completed;
+    #needsReview : Text;
+    #payoutPending;
+    #refunded;
+    #swapping
+  };
+type RouterStatus__747787671 =
+  {
+    #awaitingDeposit;
+    #completed;
+    #needsReview : Text;
+    #payoutPending;
+    #refunded;
+    #swapping
+  };
+type TestToggles__192274497 =
+  {
+    failNextNakPayout : Bool;
+    houdiniLegFailsNextOrder : Bool;
+    poolWithdrawFailsNextSwap : Bool
+  };
+type TestToggles__417491123 =
+  {
+    failNextNakPayout : Bool;
+    houdiniLegFailsNextOrder : Bool;
+    poolWithdrawFailsNextSwap : Bool
+  };
+type TestToggles__579933145 =
+  {
+    failNextNakPayout : Bool;
+    forceSlippage : Bool;
+    poolWithdrawFailsNextSwap : Bool
+  };
+type Timestamp__212698360 = Timestamp__301639476;
+type Timestamp__301639476 = Int;
+type Token__400207416 =
+  {chain : Text; name : Text; symbol : Text; usdMicro : Nat};
+type Token__45990318 =
+  {chain : Text; name : Text; symbol : Text; usdMicro : Nat};
+type UserRole__91647283 = {#admin; #guest; #user};
+{
+  "20261009_000000" : OldActor__625272489 -> NewActor__705149831;
+  "20261010_000000" : (old : OldActor__291527786) -> NewActor__237791113
+}
+actor  {
+  stable busy : {var locked : Bool};
+  stable config : {var value : Config__740071775};
+  stable icpUsdMicro : {var value : Nat};
+  stable nextOrderId : {var value : Nat};
+  stable orders :
+    {
+      var root : Node__204828119<OrderId__997096394, Order__865812706>;
+      var size : Nat__227979830
+    };
+  stable sandboxAccountOwners :
+    {var root : Node__204828119<Text, Principal>; var size : Nat__227979830};
+  stable sandboxIcpBalances :
+    {var root : Node__204828119<Text, Nat>; var size : Nat__227979830};
+  stable sandboxNakBalances :
+    {var root : Node__204828119<Text, Nat>; var size : Nat__227979830};
+  stable sandboxPool : {var value : PoolReserves__869124590};
+  stable sandboxRouterMain : {var value : PoolReserves__869124590};
+  stable testToggles : {var value : TestToggles__192274497};
+  stable tokens :
+    {
+      var root : Node__204828119<Text, Token__45990318>;
+      var size : Nat__227979830
+    }
+};

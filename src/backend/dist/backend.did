@@ -1,0 +1,208 @@
+type Value = 
+ variant {
+   "bool": bool;
+   float: float64;
+   "int": int;
+   "nat": nat;
+   "null";
+   "text": text;
+ };
+type Token = 
+ record {
+   chain: text;
+   name: text;
+   symbol: text;
+   usdMicro: nat;
+ };
+type Timestamp = int;
+type TestToggles = 
+ record {
+   failNextNakPayout: bool;
+   houdiniLegFailsNextOrder: bool;
+   poolWithdrawFailsNextSwap: bool;
+ };
+type SandboxBalances = 
+ record {
+   pool: PoolReserves;
+   routerMainIcp: Amount;
+   routerMainNak: Amount;
+   users: vec record {
+                icp: Amount;
+                nak: Amount;
+                "principal": principal;
+              };
+ };
+type RouterStatus = 
+ variant {
+   awaitingDeposit;
+   completed;
+   needsReview: text;
+   payoutPending;
+   refunded;
+   swapping;
+ };
+type RouterLeg = 
+ record {
+   icpAfterFees: Amount;
+   icpIn: Amount;
+   minNakOut: Amount;
+   nakOut: Amount;
+   priceImpactBps: Bps;
+   verdict: text;
+   wouldRefund: bool;
+ };
+type RouteType = 
+ variant {
+   private;
+   standard;
+ };
+type Result = 
+ record {
+   hasMore: bool;
+   rows: vec vec Cell;
+ };
+type RefundReason = 
+ variant {
+   admin;
+   priceImpact: record {bps: Bps;};
+   swapFailed: text;
+   tooLarge;
+   tooSmall;
+ };
+type Quote = 
+ record {
+   houdini: HoudiniLeg;
+   icpUsdMicro: nat;
+   router: RouterLeg;
+   tokenAmount: nat;
+   tokenChain: text;
+   tokenSymbol: text;
+   tokenUsdMicro: nat;
+ };
+type ProcessResult = 
+ variant {
+   advanced: RouterStatus;
+   busy;
+   noop;
+ };
+type PoolReserves = 
+ record {
+   icp: Amount;
+   nak: Amount;
+ };
+type OrderSummary = 
+ record {
+   createdAt: Timestamp;
+   houdiniStatus: HoudiniStatus;
+   id: OrderId;
+   recipient: principal;
+   routeType: RouteType;
+   routerStatus: RouterStatus;
+   tokenAmount: nat;
+   tokenChain: text;
+   tokenSymbol: text;
+   updatedAt: Timestamp;
+ };
+type OrderId = nat;
+type Order = 
+ record {
+   block: opt BlockIndex;
+   createdAt: Timestamp;
+   depositAccountId: AccountId;
+   depositAddress: text;
+   depositSubaccount: blob;
+   houdiniStatus: HoudiniStatus;
+   icpIn: opt Amount;
+   id: OrderId;
+   nakOut: opt Amount;
+   recipient: principal;
+   refundAddress: opt text;
+   refundReason: opt RefundReason;
+   routeType: RouteType;
+   routerStatus: RouterStatus;
+   tokenAmount: nat;
+   tokenChain: text;
+   tokenSymbol: text;
+   updatedAt: Timestamp;
+ };
+type HoudiniStatus = 
+ variant {
+   anonymizing;
+   completed;
+   confirming;
+   exchanging;
+   expired;
+   failed;
+   refunded;
+   waiting;
+ };
+type HoudiniLeg = 
+ record {
+   etaSeconds: nat;
+   feeBps: Bps;
+   icpOut: Amount;
+   routeType: RouteType;
+   tokenAmount: nat;
+   tokenChain: text;
+   tokenSymbol: text;
+ };
+type Config = 
+ record {
+   maxImpactBps: Bps;
+   maxOrderIcp: Amount;
+   minOrderIcp: Amount;
+   orderTtlSeconds: nat;
+   paused: bool;
+   slippageBps: Bps;
+ };
+type Cell = 
+ record {
+   name: text;
+   value: Value;
+ };
+type Bps = nat;
+type BlockIndex = nat;
+type Amount = nat;
+type AccountId = text;
+service : {
+  /// Create a new order; returns the order id.
+  createOrder: (recipient: principal, tokenSymbol: text, tokenAmount: 
+   nat, routeType: RouteType, refundAddress: opt text) -> (OrderId);
+  execute: (qJson: text) -> (Result) query;
+  /// Static Markdown documentation of the public backend API.
+  getApiDoc: () -> (text) query;
+  /// Read the current config.
+  getConfig: () -> (Config) query;
+  /// Read the ICP USD price.
+  getIcpPrice: () -> (nat) query;
+  /// Read the simulated NAK balance of a principal.
+  getNakBalance: ("principal": principal) -> (nat) query;
+  /// Fetch a single order by id.
+  getOrder: (id: OrderId) -> (opt Order) query;
+  /// Two-leg quote preview for a prospective order.
+  getQuote: (tokenSymbol: text, tokenAmount: nat, routeType: RouteType) ->
+   (Quote) query;
+  /// Read the sandbox balances snapshot.
+  getSandboxBalances: () -> (SandboxBalances) query;
+  /// Read the sandbox test toggles.
+  getTestToggles: () -> (TestToggles) query;
+  /// List orders, optionally filtered by router status.
+  listOrders: (filter: opt RouterStatus) -> (vec OrderSummary) query;
+  /// Read the token catalogue.
+  listTokens: () -> (vec Token) query;
+  /// Advance a single order through the router pipeline.
+  processOrder: (id: OrderId) -> (ProcessResult);
+  /// Reset the sandbox to its seeded state.
+  resetSandbox: () -> ();
+  schema: () -> (text) query;
+  /// Update the config.
+  setConfig: (config: Config) -> ();
+  /// Update the ICP USD price.
+  setIcpPrice: (usdMicro: nat) -> ();
+  /// Update the sandbox test toggles.
+  setTestToggles: (toggles: TestToggles) -> ();
+  /// Update a token's USD price.
+  setTokenPrice: (symbol: text, usdMicro: nat) -> ();
+  /// Simulate the user having sent the source token ("I've sent it").
+  simulateDeposit: (id: OrderId) -> ();
+}

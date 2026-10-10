@@ -457,7 +457,7 @@
       const usable = tokens.filter((t) => !(t.symbol === 'ICP' && t.chain === 'icp'));
       // ICP itself goes straight to the router (no Houdiniswap leg), pinned first.
       if (health?.routes?.icp !== false && (!term || /^(icp|internet)/i.test(term))) {
-        usable.unshift({ ...DIRECT_ICP, icon: icpTok?.icon || null, usd: icpTok?.usd ?? health?.prices?.icpUsd ?? null });
+        usable.unshift({ ...DIRECT_ICP, icon: icpTok?.icon || 'https://api.houdiniswap.com/assets/tokens/ICP-ICP.png', usd: icpTok?.usd ?? health?.prices?.icpUsd ?? null });
       }
       if (!usable.length) { list.innerHTML = '<div class="muted" style="padding:12px">No tokens match. Try a ticker like USDT, BTC or SOL.</div>'; return; }
       list.innerHTML = usable.map((t, i) => t.direct ? `

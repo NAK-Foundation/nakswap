@@ -1,5 +1,6 @@
 {
   "name": "nakswap-v2-relay",
+  "license": "UNLICENSED",
   "version": "0.1.0",
   "private": true,
   "type": "module",

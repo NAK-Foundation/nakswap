@@ -1,5 +1,6 @@
 {
   "name": "@caffeine/template-app",
+  "license": "UNLICENSED",
   "type": "module",
   "engines": {
     "node": ">=16.0.0",

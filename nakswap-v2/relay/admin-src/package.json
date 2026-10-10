@@ -1,5 +1,6 @@
 {
   "name": "nakswap-admin-dashboard",
+  "license": "UNLICENSED",
   "private": true,
   "type": "module",
   "description": "Source of relay/public/admin/app.js (the admin dashboard). Build: npm install && npm run build",

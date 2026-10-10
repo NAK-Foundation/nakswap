@@ -31,9 +31,17 @@ const houdini =
     : createMockHoudini({ payIcp: ic.payIcp, settleAfterMs: Number(env.MOCK_SETTLE_MS || 5_000) });
 
 const prices = createPrices();
-const handle = createApp({ houdini, ic, prices, log: (...a) => console.log(new Date().toISOString(), ...a) });
+// Order-link keys are derived from the relay identity seed, so links survive restarts.
+const secret = env.RELAY_IDENTITY_SEED ? `nakswap-order-key:${env.RELAY_IDENTITY_SEED}` : undefined;
+const handle = createApp({ houdini, ic, prices, secret, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
-http.createServer(handle).listen(port, () => {
+const server = http.createServer(handle);
+// Slow-client protection: drop connections that dribble headers or bodies.
+server.headersTimeout = 10_000;
+server.requestTimeout = 30_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 50;
+server.listen(port, () => {
   console.log(`nakswap relay on :${port}`);
   console.log(`  ic host:   ${host}`);
   console.log(`  houdini:   ${houdini.mode}${houdini.ready === false ? ' (API key missing)' : ''}`);

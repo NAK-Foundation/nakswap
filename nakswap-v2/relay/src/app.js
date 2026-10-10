@@ -1,5 +1,6 @@
 // HTTP API + swap page for NAKSwap v2. Pure request handling; houdini and ic clients are
 // injected so the same code runs live, against mocks, and in tests.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ORDER_STATUS } from './houdini.js';
@@ -14,10 +15,35 @@ const MIME = {
   '.png': 'image/png',
 };
 
+// Sent with every response. The page's own script and styles are inline, fonts come from
+// Google Fonts and token icons from Houdini's CDN; nothing may frame the page.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' https: data:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join('; '),
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Strict-Transport-Security': 'max-age=31536000',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+};
+
 const json = (res, code, body) => {
+  // No CORS headers: the API is for this page only (same origin), so other sites can't
+  // spend the Houdini quota or open orders through it from a visitor's browser.
   res.writeHead(code, {
+    ...SECURITY_HEADERS,
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'no-store',
   });
   res.end(
@@ -34,7 +60,10 @@ const readBody = (req) =>
     let data = '';
     req.on('data', (c) => {
       data += c;
-      if (data.length > 16_384) reject(new Error('body too large'));
+      if (data.length > 8_192) {
+        reject(Object.assign(new Error('body too large'), { status: 413 }));
+        req.destroy();
+      }
     });
     req.on('end', () => {
       try {
@@ -45,20 +74,37 @@ const readBody = (req) =>
     });
   });
 
+// Client IP. Railway's edge sets X-Real-IP; the left end of X-Forwarded-For is whatever the
+// client typed, so it is never trusted (it would let anyone dodge the rate limits).
 function userContext(req) {
-  const fwd = req.headers['x-forwarded-for'];
+  const real = req.headers['x-real-ip'];
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const ip = (typeof real === 'string' && real.trim()) || fwd[fwd.length - 1] || req.socket?.remoteAddress || '0.0.0.0';
+  const tz = String(req.headers['x-user-timezone'] || 'UTC');
   return {
-    ip: (Array.isArray(fwd) ? fwd[0] : fwd || '').split(',')[0].trim() || req.socket?.remoteAddress || '0.0.0.0',
-    agent: req.headers['user-agent'] || 'unknown',
-    timezone: req.headers['x-user-timezone'] || 'UTC',
+    ip: ip.slice(0, 64),
+    agent: String(req.headers['user-agent'] || 'unknown').slice(0, 256),
+    timezone: /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(tz) ? tz : 'UTC',
   };
 }
 
+// Input shapes accepted from the page; anything else is rejected before it reaches Houdini
+// or the router.
+const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const ADDR_RE = /^[A-Za-z0-9:._-]{1,128}$/;
+
 // Small fixed-window limiter (each order costs a canister call and a Houdini exchange).
+// Old windows are dropped as it goes, so a flood of addresses can't grow it without bound.
 function limiter(max, windowMs) {
   const hits = new Map();
+  let lastSweep = Date.now();
   return (key) => {
     const now = Date.now();
+    if (now - lastSweep > windowMs || hits.size > 50_000) {
+      for (const [k, h] of hits) if (now - h.start > windowMs) hits.delete(k);
+      lastSweep = now;
+      if (hits.size > 50_000) hits.clear();
+    }
     const h = hits.get(key);
     if (!h || now - h.start > windowMs) {
       hits.set(key, { start: now, n: 1 });
@@ -76,6 +122,7 @@ function serveStatic(req, res, pathname) {
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return false;
   res.writeHead(200, {
+    ...SECURITY_HEADERS,
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
     'Cache-Control': rel === 'index.html' ? 'no-cache' : 'public, max-age=300',
   });
@@ -86,9 +133,32 @@ function serveStatic(req, res, pathname) {
 // Houdini's floor for standard and private routes, in USD (it rejects quotes below this).
 export const HOUDINI_MIN_USD = 25;
 
-export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
-  const allowOrder = limiter(10, 60_000);
-  const allowQuote = limiter(60, 60_000);
+// Order links carry a key derived from the relay's secret, so order numbers (which count up)
+// can't be used to look through other people's orders.
+export function orderKey(secret, id) {
+  return crypto.createHmac('sha256', secret).update(`order:${id}`).digest('hex').slice(0, 20);
+}
+
+export function createApp({
+  houdini,
+  ic,
+  prices = {},
+  log = () => {},
+  secret = crypto.randomBytes(32),
+  pokeEveryMs = 15_000,
+  houdiniCacheMs = 5_000,
+  quoteCacheMs = 20_000,
+}) {
+  // Per visitor IP, plus global ceilings so many addresses together still can't flood the
+  // router with orders or burn the Houdini quote allowance.
+  const allowOrder = limiter(5, 10 * 60_000);
+  const allowOrderGlobal = limiter(60, 60 * 60_000);
+  const allowQuote = limiter(30, 60_000);
+  const allowView = limiter(120, 60_000);
+  const allowTokens = limiter(60, 60_000);
+  const quoteCache = new Map(); // fromId|amount|refund -> { at, result }
+  const houdiniCache = new Map(); // houdiniId -> { at, h }
+  const lastPoke = new Map(); // order id -> ms
   let tokenCache = { at: 0, term: null, tokens: [] };
 
   async function tokens(term, user) {
@@ -113,7 +183,15 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
     const cfg = ic.config;
     const { fromId, amount, refundAddress } = body;
     if (!fromId || !(Number(amount) > 0)) return [400, { error: 'fromId and a positive amount are required' }];
+    if (!ID_RE.test(String(fromId)) || !(Number(amount) < 1e15) || String(amount).length > 40) return [400, { error: 'invalid token or amount' }];
+    if (refundAddress && !ADDR_RE.test(String(refundAddress))) return [400, { error: 'invalid refund address' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
+    // Same token + amount within a few seconds (typing, re-renders): reuse the last answer
+    // instead of spending another Houdini quote request.
+    const qKey = `${fromId}|${Number(amount)}|${refundAddress || ''}`;
+    const cached = quoteCache.get(qKey);
+    if (cached && Date.now() - cached.at < quoteCacheMs) return [200, cached.result];
+    for (const [k, v] of quoteCache) if (Date.now() - v.at >= quoteCacheMs) quoteCache.delete(k);
     const all = await houdini.quotesToIcp({ fromId, amount, refundAddress: refundAddress || undefined, user });
     // Houdini can return dozens of routes; show the best Standard and the best Private one.
     const best = new Map();
@@ -154,19 +232,21 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
       if (!a.blocked !== !b.blocked) return a.blocked ? 1 : -1;
       return b.nakOut > a.nakOut ? 1 : b.nakOut < a.nakOut ? -1 : 0;
     });
-    return [
-      200,
-      {
-        routes,
-        quotedAt: Date.now(),
-        router: { ready: Boolean(ic.routerId), slippageBps: cfg.slippageBps, maxImpactBps: cfg.maxImpactBps },
-      },
-    ];
+    const result = {
+      routes,
+      quotedAt: Date.now(),
+      router: { ready: Boolean(ic.routerId), slippageBps: cfg.slippageBps, maxImpactBps: cfg.maxImpactBps },
+    };
+    quoteCache.set(qKey, { at: Date.now(), result });
+    return [200, result];
   }
 
   async function createOrder(body, user) {
     const { quoteId, recipient, refundAddress, refundTo, minNakOut } = body;
     if (!quoteId) return [400, { error: 'quoteId is required' }];
+    if (!ID_RE.test(String(quoteId))) return [400, { error: 'invalid quoteId' }];
+    if (refundAddress && !ADDR_RE.test(String(refundAddress))) return [400, { error: 'invalid refund address' }];
+    if (minNakOut != null && !/^\d{1,30}$/.test(String(minNakOut))) return [400, { error: 'invalid minNakOut' }];
     let recipientP, refundToP;
     try {
       recipientP = ic.parsePrincipal(recipient);
@@ -174,7 +254,8 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
     } catch (e) {
       return [400, { error: `invalid principal: ${e.message}` }];
     }
-    if (!allowOrder(user.ip)) return [429, { error: 'too many orders, slow down' }];
+    if (!allowOrder(user.ip)) return [429, { error: 'Too many orders from your connection. Wait a few minutes and try again.' }];
+    if (!allowOrderGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a little while.' }];
 
     // 1. Router order first: it mints the deposit account Houdini will pay into.
     const order = await ic.createOrder({
@@ -202,6 +283,7 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
       201,
       {
         orderId: order.id,
+        orderKey: orderKey(secret, order.id),
         houdiniId: ex.houdiniId,
         send: {
           amount: ex.inAmount,
@@ -219,14 +301,26 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
     ];
   }
 
-  async function getOrder(id, user) {
+  async function getOrder(id, key, user) {
+    if (!allowView(user.ip)) return [429, { error: 'too many requests, slow down' }];
+    if (id.length > 20 || !crypto.timingSafeEqual(Buffer.from(String(key || '').padEnd(20).slice(0, 20)), Buffer.from(orderKey(secret, id)))) {
+      return [404, { error: 'order not found. Use the full order code, e.g. 12-ab34…' }];
+    }
     const order = await ic.getOrder(BigInt(id));
     if (!order) return [404, { error: 'order not found' }];
     let hd = null;
     const houdiniId = order.houdiniId[0];
     if (houdiniId) {
       try {
-        const h = await houdini.getOrder(houdiniId, user);
+        // Several open tabs polling the same order share one Houdini lookup.
+        let h;
+        const c = houdiniCache.get(houdiniId);
+        if (c && Date.now() - c.at < houdiniCacheMs) h = c.h;
+        else {
+          h = await houdini.getOrder(houdiniId, user);
+          houdiniCache.set(houdiniId, { at: Date.now(), h });
+          if (houdiniCache.size > 5_000) houdiniCache.clear();
+        }
         hd = {
           houdiniId,
           status: h.status,
@@ -243,7 +337,11 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
       }
     }
     // Houdini says ICP was sent; nudge the router instead of waiting for its next tick.
-    if (hd?.status === 4 && statusName(order.status) === 'awaitingDeposit') {
+    // At most one poke per order every pokeEveryMs, however many tabs are polling.
+    const k = String(order.id);
+    if (hd?.status === 4 && statusName(order.status) === 'awaitingDeposit' && !(Date.now() - (lastPoke.get(k) || 0) < pokeEveryMs)) {
+      lastPoke.set(k, Date.now());
+      if (lastPoke.size > 5_000) lastPoke.clear();
       await ic.poke(order.id).catch(() => {});
     }
     const fresh = (await ic.getOrder(BigInt(id))) ?? order;
@@ -266,12 +364,11 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
     const user = userContext(req);
     try {
       if (req.method === 'OPTIONS') {
-        res.writeHead(204, {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET,POST',
-          'Access-Control-Allow-Headers': 'Content-Type,x-user-timezone',
-        });
+        res.writeHead(204, SECURITY_HEADERS);
         return res.end();
+      }
+      if (req.method === 'POST' && !String(req.headers['content-type'] || '').startsWith('application/json')) {
+        return json(res, 415, { error: 'send JSON' });
       }
       if (req.method === 'GET' && url.pathname === '/api/health') {
         const cfg = ic.config;
@@ -304,7 +401,9 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
         });
       }
       if (req.method === 'GET' && url.pathname === '/api/tokens') {
-        return json(res, 200, { tokens: await tokens(url.searchParams.get('term') || '', user) });
+        if (!allowTokens(user.ip)) return json(res, 429, { error: 'too many requests, slow down' });
+        const term = (url.searchParams.get('term') || '').slice(0, 40);
+        return json(res, 200, { tokens: await tokens(term, user) });
       }
       if (req.method === 'POST' && url.pathname === '/api/quote') {
         const [code, body] = await quote(await readBody(req), user);
@@ -316,7 +415,7 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
       }
       const m = url.pathname.match(/^\/api\/orders\/(\d+)$/);
       if (req.method === 'GET' && m) {
-        const [code, body] = await getOrder(m[1], user);
+        const [code, body] = await getOrder(m[1], url.searchParams.get('key'), user);
         return json(res, code, body);
       }
       if (req.method === 'GET' && !url.pathname.startsWith('/api/') && serveStatic(req, res, url.pathname)) return;

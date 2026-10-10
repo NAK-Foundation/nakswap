@@ -81,6 +81,8 @@ module {
     #notAuthorized;
     #paused;
     #anonymousRecipient;
+    #invalidRecipient;
+    #tooManyOpenOrders;
   };
 
   public type PokeResult = {
@@ -88,6 +90,7 @@ module {
     #busy;
     #tooSoon;
     #notFound;
+    #notAuthorized;
   };
 
   public type Health = {

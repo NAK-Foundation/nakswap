@@ -65,6 +65,7 @@ type RefundReason =
 type PokeResult = 
  variant {
    busy;
+   notAuthorized;
    notFound;
    processed: Status;
    tooSoon;
@@ -110,8 +111,10 @@ type FeeStatus =
 type CreateOrderError = 
  variant {
    anonymousRecipient;
+   invalidRecipient;
    notAuthorized;
    paused;
+   tooManyOpenOrders;
  };
 type CreateOrderArgs = 
  record {

@@ -67,13 +67,13 @@ async function serve(handle) {
   const server = http.createServer(handle);
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (method, path, body) => {
+  const call = async (method, path, body, headers = {}) => {
     const res = await fetch(base + path, {
       method,
-      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.7' },
+      headers: { 'Content-Type': 'application/json', 'x-real-ip': '203.0.113.7', ...headers },
       body: body ? JSON.stringify(body) : undefined,
     });
-    return { code: res.status, body: await res.json() };
+    return { code: res.status, body: await res.json(), headers: res.headers };
   };
   return { call, close: () => server.close() };
 }
@@ -89,7 +89,7 @@ test('mock flow: quote -> order -> Houdini pays the deposit account -> NAK deliv
       o.paid = e8s;
     },
   });
-  const { call, close } = await serve(createApp({ houdini, ic }));
+  const { call, close } = await serve(createApp({ houdini, ic, pokeEveryMs: 0, houdiniCacheMs: 0 }));
   try {
     const q = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' });
     assert.equal(q.code, 200);
@@ -106,9 +106,12 @@ test('mock flow: quote -> order -> Houdini pays the deposit account -> NAK deliv
     assert.equal(ic.orders.get(0n).houdiniId[0], o.body.houdiniId, 'router order is linked to the Houdini order');
 
     await new Promise((r) => setTimeout(r, 80));
-    await call('GET', `/api/orders/${o.body.orderId}`); // triggers mock payout
+    const view = `/api/orders/${o.body.orderId}?key=${o.body.orderKey}`;
+    assert.equal((await call('GET', `/api/orders/${o.body.orderId}`)).code, 404, 'no key, no order');
+    assert.equal((await call('GET', `/api/orders/${o.body.orderId}?key=00000000000000000000`)).code, 404, 'wrong key, no order');
+    await call('GET', view); // triggers mock payout
     await new Promise((r) => setTimeout(r, 20));
-    const s = await call('GET', `/api/orders/${o.body.orderId}`);
+    const s = await call('GET', view);
     assert.equal(s.body.houdini.statusLabel, 'COMPLETED');
     assert.equal(s.body.stage, 'completed', 'relay pokes the router once Houdini reports COMPLETED');
   } finally {
@@ -177,5 +180,29 @@ test('live Houdini client sends auth + compliance headers and the deposit accoun
     assert.equal(c.init.headers.Authorization, 'k:s');
     assert.equal(c.init.headers['x-user-ip'], '203.0.113.7');
     assert.equal(c.init.headers['x-user-timezone'], 'America/Chicago');
+  }
+});
+
+test('hardening: security headers, no CORS, spoofed X-Forwarded-For does not dodge order limits', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic }));
+  try {
+    const h = await call('GET', '/api/health');
+    assert.equal(h.headers.get('access-control-allow-origin'), null);
+    assert.equal(h.headers.get('x-frame-options'), 'DENY');
+    assert.match(h.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    const q = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' });
+    let last;
+    for (let i = 0; i < 7; i++) {
+      // a new fake X-Forwarded-For each time; the edge-set X-Real-IP stays the same
+      last = await call('POST', '/api/orders', { quoteId: q.body.routes[0].quoteId, recipient: ALICE }, { 'x-forwarded-for': `10.0.0.${i}` });
+    }
+    assert.equal(last.code, 429);
+    assert.equal(ic.orders.size, 5);
+    const junk = await call('POST', '/api/quote', { fromId: '../../etc', amount: '100' });
+    assert.equal(junk.code, 400);
+  } finally {
+    close();
   }
 });

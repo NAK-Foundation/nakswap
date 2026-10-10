@@ -26,6 +26,10 @@ mixin (
     // Low cycles counts as paused: no new orders until the canister is topped up.
     if (cfg.paused or Cycles.balance() < Guard.lowCycles) { return #err(#paused) };
     if (args.recipient.isAnonymous()) { return #err(#anonymousRecipient) };
+    // Paying the router itself would strand the NAK / ICP in its main account.
+    if (args.recipient == self or args.refundTo == ?self) { return #err(#invalidRecipient) };
+    switch (args.refundTo) { case (?r) { if (r.isAnonymous()) { return #err(#anonymousRecipient) } }; case null {} };
+    if (active.size() >= Guard.maxOpenOrders) { return #err(#tooManyOpenOrders) };
     let id = state.nextId;
     state.nextId += 1;
     let order = Orders.create(id, self, args);
@@ -36,29 +40,33 @@ mixin (
 
   public shared ({ caller }) func attachHoudini(id : Nat, houdiniId : Text) : async Bool {
     if (not Orders.isOperator(state.config, caller)) { return false };
+    if (houdiniId.size() == 0 or houdiniId.size() > 64) { return false };
     switch (orders.get(id)) {
-      case (?o) { o.houdiniId := ?houdiniId; true };
+      case (?o) {
+        switch (o.houdiniId, o.status) {
+          case (?h, _) { h == houdiniId }; // idempotent; never re-pointed
+          case (null, #awaitingDeposit) { o.houdiniId := ?houdiniId; true };
+          case _ { false };
+        };
+      };
       case null { false };
     };
   };
 
-  public query func getOrder(id : Nat) : async ?Types.OrderView {
+  // Operators and admin only: order ids are sequential, so a public getOrder would let anyone
+  // list every user's principal. The relay serves each order to its owner.
+  public query ({ caller }) func getOrder(id : Nat) : async ?Types.OrderView {
+    if (not Orders.isOperator(state.config, caller)) { return null };
     switch (orders.get(id)) {
       case (?o) { ?o.toView() };
       case null { null };
     };
   };
 
-  // Anyone may nudge an order forward (e.g. the UI after Houdini reports FINISHED).
-  // Throttled per order so it cannot be used to burn cycles on ledger calls.
+  // The relay (operator) nudges an order once Houdini reports the ICP sent; the background
+  // worker covers everything else. Not public: every poke can cost a ledger call.
   public shared ({ caller }) func poke(id : Nat) : async Types.PokeResult {
-    switch (orders.get(id)) {
-      case null { return #notFound };
-      case (?o) {
-        let isOp = Orders.isOperator(state.config, caller);
-        if (not isOp and Time.now() - o.lastCheckedAt < 10_000_000_000) { return #tooSoon };
-      };
-    };
+    if (not Orders.isOperator(state.config, caller)) { return #notAuthorized };
     await* Engine.step(state, fees, orders, active, self, id);
   };
 };

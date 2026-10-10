@@ -91,8 +91,21 @@ module {
         } catch (_) { return #processed(order.status) };
 
         if (bal == 0) {
-          let deadline = order.createdAt + cfg.orderTtlSeconds * 1_000_000_000;
-          if (Time.now() >= deadline) { setStatus(order, active, #expired) };
+          switch (order.houdiniId) {
+            case null {
+              // Never paired with a Houdini exchange: no one was told to pay, so drop it.
+              let ttl = Nat.min(Guard.unattachedTtlSeconds, cfg.orderTtlSeconds);
+              if (Time.now() >= order.createdAt + ttl * 1_000_000_000) {
+                orders.remove(id);
+                active.remove(id);
+                return #notFound;
+              };
+            };
+            case (?_) {
+              let deadline = order.createdAt + cfg.orderTtlSeconds * 1_000_000_000;
+              if (Time.now() >= deadline) { setStatus(order, active, #expired) };
+            };
+          };
           return #processed(order.status);
         };
         if (cfg.paused) { return #processed(order.status) };

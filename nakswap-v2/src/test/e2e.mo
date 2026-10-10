@@ -252,8 +252,11 @@ actor Test {
     Debug.print("7. expiry");
     ignore await router.setConfig({ cfg with orderTtlSeconds = 0 });
     let o7 = await newOrder(alice, null);
+    ignore await router.attachHoudini(o7.id, "houdini-o7");
     ignore await router.poke(o7.id);
     check("expired", statusTag(await statusOf(o7.id)) == "expired");
+    let o7b = await newOrder(alice, null); // never paired with a Houdini exchange
+    check("unpaired order is deleted, not kept", (await router.poke(o7b.id)) == #notFound and (await router.getOrder(o7b.id)) == null);
     check("reopen works", (await router.reopen(o7.id)) == ?#awaitingDeposit);
     ignore await router.setConfig(cfg);
 
@@ -266,6 +269,33 @@ actor Test {
     check("fee unchanged", (await router.feeStatus()).to == feeWallet);
     let anonRes = await router.createOrder({ recipient = user; refundTo = null; minNakOut = null });
     check("anonymous recipient rejected", switch anonRes { case (#err(#anonymousRecipient)) { true }; case _ { false } });
+
+    // ---- 9. hardening ----
+    Debug.print("9. hardening");
+    let o9 = await newOrder(alice, null);
+    check("stranger cannot poke", (await stranger.tryPoke(routerId, o9.id)) == #notAuthorized);
+    check("stranger cannot read orders", (await stranger.tryGetOrder(routerId, o9.id)) == null);
+    check("houdini id attaches once", await router.attachHoudini(o9.id, "h-1"));
+    check("houdini id cannot be re-pointed", not (await router.attachHoudini(o9.id, "h-2")));
+    check("houdini id attach is idempotent", await router.attachHoudini(o9.id, "h-1"));
+    check("oversized houdini id rejected", not (await router.attachHoudini(o0.id, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")));
+    let selfRes = await router.createOrder({ recipient = routerId; refundTo = null; minNakOut = null });
+    check("router itself rejected as recipient", switch selfRes { case (#err(#invalidRecipient)) { true }; case _ { false } });
+    check("setConfig cannot swap the pool", not (await router.setConfig({ cfg with pool = alice })));
+    check("setConfig rejects 50% slippage", not (await router.setConfig({ cfg with slippageBps = 5_000 })));
+    check("setConfig rejects min >= max", not (await router.setConfig({ cfg with minOrderIcp = 60 * ICP })));
+    check("setConfig accepts sane values", await router.setConfig({ cfg with maxOrderIcp = 30 * ICP }));
+    check("config kept the pool", (await router.getConfig()).pool == poolId);
+    var opened = 0;
+    var capped = false;
+    label spam while (opened < 200) {
+      switch (await router.createOrder({ recipient = alice; refundTo = null; minNakOut = null })) {
+        case (#ok _) { opened += 1 };
+        case (#err(#tooManyOpenOrders)) { capped := true; break spam };
+        case (#err _) { break spam };
+      };
+    };
+    check("open orders capped at 150 (opened " # opened.toText() # " more)", capped and (await router.activeOrderIds()).size() == 150);
 
     Debug.print(if (failures == 0) { "ALL PASSED" } else { failures.toText() # " FAILED" });
   };

@@ -269,7 +269,7 @@
       </div>
 
       <form class="track" id="trackForm">
-        <input id="trackId" inputmode="numeric" placeholder="Order number" aria-label="Order number">
+        <input id="trackId" placeholder="Order code, e.g. 12-ab34…" aria-label="Order code" maxlength="40" autocomplete="off">
         <button class="btn" type="submit">Track order</button>
       </form>
       <div class="recent" id="recent"></div>
@@ -278,7 +278,7 @@
     <div id="orderView" hidden>
       <div class="card">
         <div class="row" style="margin-bottom:18px">
-          <div><span class="label" style="margin:0">Order</span><div class="mono" style="font-size:20px" id="orderTitle"></div></div>
+          <div><span class="label" style="margin:0">Order</span><div class="mono" style="font-size:20px" id="orderTitle"></div><div class="hint" style="margin-top:4px">Order code <span class="mono" id="orderCode"></span> <button class="btn copy" style="padding:2px 8px;font-size:12px" type="button" data-copy="orderCode">Copy</button><br>Save it to track this swap from any device.</div></div>
           <button class="btn" id="backBtn" type="button">New swap</button>
         </div>
         <div class="deposit" id="depositBox" hidden>
@@ -583,10 +583,11 @@
         recipient: $('recipient').value.trim(),
         refundAddress: $('refund').value.trim() || undefined,
       });
-      store.set(`nak.order.${r.orderId}`, r);
-      const recent = store.get('nak.recent', []).filter((x) => x !== String(r.orderId));
-      store.set('nak.recent', [String(r.orderId), ...recent].slice(0, 8));
-      location.hash = `order=${r.orderId}`;
+      const code = `${r.orderId}-${r.orderKey}`;
+      store.set(`nak.order.${code}`, r);
+      const recent = store.get('nak.recent', []).filter((x) => x !== code && /-/.test(x));
+      store.set('nak.recent', [code, ...recent].slice(0, 8));
+      location.hash = `order=${code}`;
     } catch (e) {
       $('quoteErr').textContent = e.message;
       updateSwapBtn();
@@ -607,14 +608,15 @@
     if (state) el.classList.add(state);
     $(`${id}sub`).textContent = text;
   }
-  async function showOrder(id) {
+  async function showOrder(code) {
     $('swapView').hidden = true; $('orderView').hidden = false;
-    $('orderTitle').textContent = `#${id}`;
-    const saved = store.get(`nak.order.${id}`, null);
+    $('orderTitle').textContent = `#${code.split('-')[0]}`;
+    $('orderCode').textContent = code;
+    const saved = store.get(`nak.order.${code}`, null);
     if (saved) renderDeposit(saved.send);
     clearInterval(pollTimer);
-    await pollOrder(id);
-    pollTimer = setInterval(() => pollOrder(id), 8000);
+    await pollOrder(code);
+    pollTimer = setInterval(() => pollOrder(code), 8000);
   }
   function renderDeposit(send) {
     if (!send || !send.to) { $('depositBox').hidden = true; return; }
@@ -626,9 +628,10 @@
     const exp = send.expires ? new Date(send.expires) : null;
     $('depExpires').textContent = exp ? `Send before ${exp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
   }
-  async function pollOrder(id) {
+  async function pollOrder(code) {
     try {
-      const o = await api(`/api/orders/${id}`);
+      const [id, key] = code.split('-');
+      const o = await api(`/api/orders/${id}?key=${encodeURIComponent(key || '')}`);
       $('orderErr').textContent = '';
       const h = o.houdini;
       if (h?.send) renderDeposit(h.send);
@@ -680,15 +683,16 @@
   $('backBtn').addEventListener('click', () => { location.hash = ''; });
   $('trackForm').addEventListener('submit', (ev) => {
     ev.preventDefault();
-    const id = $('trackId').value.trim().replace('#', '');
-    if (/^\d+$/.test(id)) location.hash = `order=${id}`;
+    const code = $('trackId').value.trim().replace('#', '').toLowerCase();
+    if (/^\d+-[0-9a-f]{20}$/.test(code)) location.hash = `order=${code}`;
+    else $('trackId').setCustomValidity('Paste the full order code, like 12-ab34cd56ef78ab90cd12'), $('trackId').reportValidity(), setTimeout(() => $('trackId').setCustomValidity(''), 3000);
   });
   function renderRecent() {
-    const ids = store.get('nak.recent', []);
-    $('recent').innerHTML = ids.length ? `Your recent orders: ${ids.map((i) => `<a href="#order=${i}">#${esc(i)}</a>`).join(' ')}` : '';
+    const ids = store.get('nak.recent', []).filter((i) => /^\d+-[0-9a-f]{20}$/.test(i));
+    $('recent').innerHTML = ids.length ? `Your recent orders: ${ids.map((i) => `<a href="#order=${esc(i)}">#${esc(i.split('-')[0])}</a>`).join(' ')}` : '';
   }
   function route() {
-    const m = location.hash.match(/order=(\d+)/);
+    const m = location.hash.match(/order=(\d+-[0-9a-f]{20})/);
     if (m) showOrder(m[1]);
     else { clearInterval(pollTimer); $('orderView').hidden = true; $('swapView').hidden = false; renderRecent(); }
   }

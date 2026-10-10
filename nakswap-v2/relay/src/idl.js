@@ -44,12 +44,15 @@ export const routerIdl = ({ IDL }) => {
     notAuthorized: IDL.Null,
     paused: IDL.Null,
     anonymousRecipient: IDL.Null,
+    invalidRecipient: IDL.Null,
+    tooManyOpenOrders: IDL.Null,
   });
   const PokeResult = IDL.Variant({
     processed: Status,
     busy: IDL.Null,
     tooSoon: IDL.Null,
     notFound: IDL.Null,
+    notAuthorized: IDL.Null,
   });
   const Config = IDL.Record({
     admin: IDL.Principal,

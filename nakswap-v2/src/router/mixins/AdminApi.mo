@@ -1,3 +1,4 @@
+import Array "mo:core/Array";
 import Cycles "mo:core/Cycles";
 import Int "mo:core/Int";
 import Iter "mo:core/Iter";
@@ -20,8 +21,22 @@ mixin (
 
   public query func getConfig() : async Types.Config { state.config };
 
+  // Guard rails against a typo (or a stolen admin session) bricking or redirecting the
+  // router. Ledgers and pool are fixed here; changing them takes a code upgrade.
+  func validConfig(c : Types.Config) : Bool {
+    let cur = state.config;
+    c.icpLedger == cur.icpLedger and c.nakLedger == cur.nakLedger and c.pool == cur.pool and c.icpIsToken0 == cur.icpIsToken0
+    and not c.admin.isAnonymous() and c.operators.size() >= 1 and c.operators.size() <= 5
+    and c.operators.all(func(p : Principal) : Bool = not p.isAnonymous())
+    and c.icpFee > 0 and c.icpFee <= 1_000_000 and c.nakFee <= 100_000_000
+    and c.slippageBps <= 1_000 and c.maxImpactBps <= 2_000
+    and c.minOrderIcp >= 10 * c.icpFee and c.minOrderIcp < c.maxOrderIcp and c.maxOrderIcp <= 1_000 * 100_000_000
+    and c.orderTtlSeconds <= 7 * 86_400;
+  };
+
   public shared ({ caller }) func setConfig(cfg : Types.Config) : async Bool {
     if (not Orders.isAdmin(state.config, caller)) { return false };
+    if (not validConfig(cfg)) { return false };
     state.config := cfg;
     true;
   };
@@ -51,6 +66,7 @@ mixin (
   // from its deposit subaccount or from the router's main account.
   public shared ({ caller }) func forceRefund(id : Nat, icpAmount : Nat, fromDeposit : Bool) : async ?Types.Status {
     if (not Orders.isAdmin(state.config, caller)) { return null };
+    if (icpAmount <= state.config.icpFee) { return null };
     switch (orders.get(id)) {
       case (?o) {
         switch (o.status) {
@@ -78,13 +94,16 @@ mixin (
     if (not Orders.isOperator(state.config, caller)) { return [] };
     let out = Map.empty<Nat, Types.OrderView>();
     for ((id, o) in orders.entriesFrom(fromId)) {
-      if (out.size() >= limit) { break };
+      if (out.size() >= Nat.min(limit, 100)) { break };
       out.add(id, o.toView());
     };
     out.values().toArray();
   };
 
-  public query func activeOrderIds() : async [Nat] { active.values().toArray() };
+  public query ({ caller }) func activeOrderIds() : async [Nat] {
+    if (not Orders.isOperator(state.config, caller)) { return [] };
+    active.values().toArray();
+  };
 
   // Public health check: the relay reads it to explain why swaps are paused.
   public query func health() : async Types.Health {

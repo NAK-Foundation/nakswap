@@ -8,6 +8,18 @@ actor class Stranger() {
     createOrder : shared Types.CreateOrderArgs -> async Result.Result<Types.OrderView, Types.CreateOrderError>;
     setFee : shared (Nat, Principal) -> async Bool;
     sweepFees : shared () -> async Nat;
+    poke : shared Nat -> async Types.PokeResult;
+    getOrder : shared query Nat -> async ?Types.OrderView;
+  };
+
+  public func tryPoke(router : Principal, id : Nat) : async Types.PokeResult {
+    let r : RouterApi = actor (router.toText());
+    await r.poke(id);
+  };
+
+  public func tryGetOrder(router : Principal, id : Nat) : async ?Types.OrderView {
+    let r : RouterApi = actor (router.toText());
+    await r.getOrder(id);
   };
 
   public func trySetFee(router : Principal, to : Principal) : async Bool {

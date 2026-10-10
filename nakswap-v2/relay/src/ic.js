@@ -138,8 +138,12 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
             ? 'Swaps are paused right now (maintenance or a cycles top-up). Nothing was sent; try again shortly.'
             : why === 'anonymousRecipient'
               ? 'That principal is the anonymous principal. Paste the principal of a wallet you control.'
-              : `The router refused the order (${why}).`;
-        throw Object.assign(new Error(msg), { status: why === 'paused' ? 503 : 400 });
+              : why === 'invalidRecipient'
+                ? "That principal is the NAKSwap router itself. Paste your own wallet's principal."
+                : why === 'tooManyOpenOrders'
+                  ? 'NAKSwap has too many swaps in progress right now. Nothing was sent; try again in a few minutes.'
+                  : `The router refused the order (${why}).`;
+        throw Object.assign(new Error(msg), { status: why === 'paused' || why === 'tooManyOpenOrders' ? 503 : 400 });
       }
       return r.ok;
     },

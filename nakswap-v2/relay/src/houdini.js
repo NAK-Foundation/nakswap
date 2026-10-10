@@ -16,7 +16,10 @@ export const ORDER_STATUS = {
 
 export class HoudiniError extends Error {
   constructor(status, body) {
-    super(`Houdini ${status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`);
+    // Houdini returns { code, message }; show its message rather than the raw JSON.
+    const msg = body && typeof body === 'object' && body.message ? body.message : typeof body === 'string' ? body : JSON.stringify(body);
+    super(`Houdini: ${msg}`);
+    this.code = body?.code;
     this.status = status;
     this.body = body;
   }
@@ -66,12 +69,27 @@ export function createHoudini({ apiKey, apiSecret, fetchImpl = fetch, base = BAS
     mode: 'live',
     ready,
 
+    // Houdini's `term` matches names loosely (e.g. "usdt" misses Tether), so a symbol-like
+    // term is also looked up by exact symbol and the two result sets are merged.
     async searchTokens(term, user) {
-      const { tokens } = await call('GET', '/tokens', {
-        query: { term: term || undefined, hasCex: true, mainnet: true, pageSize: term ? 30 : 60, page: 1 },
-        user,
-      });
-      return tokens || [];
+      const base = { hasCex: true, mainnet: true, page: 1 };
+      const lookups = [call('GET', '/tokens', { query: { ...base, term: term || undefined, pageSize: term ? 30 : 60 }, user })];
+      if (term && /^[a-z0-9.]{2,12}$/i.test(term)) {
+        lookups.push(call('GET', '/tokens', { query: { ...base, symbol: term.toUpperCase(), pageSize: 30 }, user }));
+      }
+      const results = await Promise.allSettled(lookups);
+      const seen = new Set();
+      const out = [];
+      for (const r of [...results].reverse()) {
+        if (r.status !== 'fulfilled') continue;
+        for (const t of r.value.tokens || []) {
+          if (seen.has(t.id)) continue;
+          seen.add(t.id);
+          out.push(t);
+        }
+      }
+      if (!out.length && results.every((r) => r.status === 'rejected')) throw results[0].reason;
+      return out;
     },
 
     // ICP on the Internet Computer chain (chain key "icp"); cached for the process lifetime.

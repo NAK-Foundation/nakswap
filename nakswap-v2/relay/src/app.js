@@ -97,7 +97,7 @@ function userContext(req) {
   const ip = (typeof real === 'string' && real.trim()) || fwd[fwd.length - 1] || req.socket?.remoteAddress || '0.0.0.0';
   const tz = String(req.headers['x-user-timezone'] || 'UTC');
   // IPv6 clients usually control a whole /64, so limit per /64 rather than per address.
-  const key = ip.includes(':') && !ip.includes('.') ? `${ip.split(':').slice(0, 4).join(':')}::/64` : ip;
+  const key = ip.includes(':') && !ip.includes('.') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : ip;
   return {
     ip: key.slice(0, 64),
     agent: String(req.headers['user-agent'] || 'unknown').slice(0, 256),
@@ -181,12 +181,20 @@ export function createApp({
   // Site-wide orders per hour. 150 keeps well inside the router's 150 open-order cap (orders
   // stay open ~5-45 min while Houdini works) and its ~120-180 swaps/hour throughput.
   orderLimitPerHour = 150,
+  cleanupEveryMs = 5 * 60_000,
 }) {
   // Per visitor IP, plus global ceilings so many addresses together still can't flood the
   // router with orders or burn the Houdini quote allowance.
   const allowOrder = limiter(5, 10 * 60_000);
   const allowOrderGlobal = limiter(orderLimitPerHour, 60 * 60_000);
   const allowQuote = limiter(30, 60_000);
+  // Site-wide quote ceiling, so many addresses together can't use up the Houdini quota.
+  const allowQuoteGlobal = limiter(1_200, 60 * 60_000);
+  // Orders this relay opened that are still waiting for a deposit (lost on restart; the
+  // router's own TTL is the backstop). Used to cap open orders per visitor and to cancel
+  // orders whose Houdini exchange expired or failed.
+  const openOrders = new Map(); // id -> { houdiniId, at, ip, user }
+  const MAX_OPEN_PER_IP = 5;
   const allowView = limiter(120, 60_000);
   const allowTokens = limiter(60, 60_000);
   const quoteCache = new Map(); // ip|fromId|amount|refund -> { at, result }
@@ -222,6 +230,7 @@ export function createApp({
     if (!ID_RE.test(fromId) || !AMOUNT_RE.test(amount)) return [400, { error: 'invalid token or amount' }];
     if (refundAddress === null || (refundAddress && !ADDR_RE.test(refundAddress))) return [400, { error: 'invalid refund address' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
+    if (!allowQuoteGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a few minutes.' }];
     // Same token + amount within a few seconds (typing, re-renders): reuse the last answer
     // instead of spending another Houdini quote request.
     // Per visitor: quote ids are never handed to two different people.
@@ -315,6 +324,9 @@ export function createApp({
       return [400, { error: `invalid principal: ${e.message}` }];
     }
     if (!allowOrder(user.ip)) return [429, { error: 'Too many orders from your connection. Wait a few minutes and try again.' }];
+    if ([...openOrders.values()].filter((o) => o.ip === user.ip).length >= MAX_OPEN_PER_IP) {
+      return [429, { error: 'You already have several swaps waiting for a deposit. Finish or let them expire first.' }];
+    }
     const q = issued.get(quoteId);
     if (!q || Date.now() - q.at > QUOTE_TTL_MS) return [409, { error: 'That quote has expired. Get a fresh quote and try again.' }];
     if (q.blocked) return [400, { error: `That route can't be used: ${q.blocked}.` }];
@@ -358,6 +370,7 @@ export function createApp({
     if (attached !== true) throw fail('attach failed');
     // Privacy: logs keep only the order number; no principals, addresses, amounts or IPs.
     log('order', { id: order.id.toString() });
+    openOrders.set(order.id.toString(), { houdiniId: String(ex.houdiniId), at: Date.now(), ip: user.ip, user });
     return [
       201,
       {
@@ -439,6 +452,31 @@ export function createApp({
       },
     ];
   }
+
+  // Every few minutes: orders older than 20 min whose Houdini exchange expired, failed, was
+  // refunded or deleted are cancelled on the router (only if nothing was deposited).
+  async function cleanup() {
+    let checked = 0;
+    for (const [id, o] of openOrders) {
+      if (Date.now() - o.at > 6 * 3600_000) { openOrders.delete(id); continue; }
+      if (Date.now() - o.at < 20 * 60_000 || checked >= 30) continue;
+      checked += 1;
+      try {
+        const r = await ic.getOrder(BigInt(id));
+        if (!r || statusName(r.status) !== 'awaitingDeposit') { openOrders.delete(id); continue; }
+        const h = await houdini.getOrder(o.houdiniId, o.user);
+        if ([5, 6, 7, 8].includes(Number(h.status))) {
+          if (await ic.cancelUnfunded(BigInt(id))) log('cancelled unfunded order', { id });
+          openOrders.delete(id);
+        } else if (Number(h.status) === 4) {
+          openOrders.delete(id); // Houdini paid; the router takes it from here
+        }
+      } catch {
+        // try again next round
+      }
+    }
+  }
+  if (cleanupEveryMs > 0) setInterval(() => cleanup().catch(() => {}), cleanupEveryMs).unref();
 
   return async function handle(req, res) {
     let url;

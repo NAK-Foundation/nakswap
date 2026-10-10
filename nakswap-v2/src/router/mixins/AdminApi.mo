@@ -64,10 +64,16 @@ mixin (
     switch (orders.get(id)) {
       case (?o) {
         switch (o.status) {
-          case (#expired or #needsReview _) {
-            rt.payFromSub.remove(id);
-            Engine.setStatus(o, active, #awaitingDeposit);
+          case (#needsReview r) {
+            // A payout may already have gone out: check the NAK ledger and use forcePayout
+            // (or nothing) instead of starting over.
+            if (not r.startsWith(#text "payout") and not rt.inFlight.contains(id)) {
+              rt.payFromSub.remove(id);
+              rt.subFees.remove(id);
+              Engine.setStatus(o, active, #awaitingDeposit);
+            };
           };
+          case (#expired) { Engine.setStatus(o, active, #awaitingDeposit) };
           case _ {};
         };
         ?o.status;
@@ -91,10 +97,13 @@ mixin (
     if (fromDeposit) {
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
       if (icpAmount + cfg.icpFee > bal) { return ?o.status };
+      // NAK in there means the swap went through: pay it out (forcePayout), don't refund.
+      let nakL : Ext.Ledger = actor (cfg.nakLedger.toText());
+      if ((await nakL.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount })) > cfg.nakFee) { return ?o.status };
     } else {
       if (state.busy) { return ?o.status };
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = null });
-      if (icpAmount + cfg.icpFee + fees.accrued > bal) { return ?o.status };
+      if (icpAmount + cfg.icpFee + fees.accrued > bal or state.busy) { return ?o.status };
     };
     if (not refundable(o.status) or rt.inFlight.contains(id)) { return ?o.status }; // re-check after the await
     if (fromDeposit) { rt.subFees.remove(id) }; // whatever is refunded from there is the user's
@@ -134,7 +143,7 @@ mixin (
     if (rt.inFlight.contains(id) or (not fromDeposit and state.busy)) { return ?o.status };
     let ledger : Ext.Ledger = actor (cfg.nakLedger.toText());
     let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = if fromDeposit { ?o.subaccount } else { null } });
-    if (nakAmount + cfg.nakFee > bal) { return ?o.status };
+    if (nakAmount + cfg.nakFee > bal or rt.inFlight.contains(id) or (not fromDeposit and state.busy)) { return ?o.status };
     switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
     if (fromDeposit) { rt.payFromSub.add(id) } else { rt.payFromSub.remove(id) };
     Engine.setStatus(o, active, #payoutPending({ icpIn = 0; nakAmount; createdAtTime = Int.abs(Time.now()).toNat64() }));
@@ -148,9 +157,14 @@ mixin (
   // Controllers only (helpers get allowances on every deposit). Each helper must be a NAKSwap
   // helper built for this router (it reports this router's id) and must have exactly the
   // same controllers as the router, so a typo or a stranger's canister can't be slipped in.
-  public shared ({ caller }) func setHelpers(list : [Principal]) : async Bool {
+  // `moduleHash`: sha256 of the helper wasm (build/helper.wasm); every helper must run exactly
+  // that code. A quarantined helper can't be dropped from the list until it's cleared.
+  public shared ({ caller }) func setHelpers(list : [Principal], moduleHash : Blob) : async Bool {
     if (not caller.isController()) { return false };
     if (rt.busyHelpers.size() > 0 or list.size() > 5) { return false };
+    for (q in rt.quarantined.values()) {
+      if (not list.any(func(p : Principal) : Bool = p == q)) { return false };
+    };
     let cfg = state.config;
     for (p in list.values()) {
       if (
@@ -160,7 +174,7 @@ mixin (
     };
     let seen = Set.empty<Principal>();
     for (p in list.values()) { if (seen.contains(p)) { return false }; seen.add(p) };
-    if (not (await* verifyHelpers(list))) { return false };
+    if (not (await* verifyHelpers(list, moduleHash))) { return false };
     if (rt.busyHelpers.size() > 0) { return false }; // re-check after the awaits
     rt.exec.helpers := list;
     rt.nextHelper := 0;
@@ -176,7 +190,7 @@ mixin (
     };
   };
 
-  func verifyHelpers(list : [Principal]) : async* Bool {
+  func verifyHelpers(list : [Principal], moduleHash : Blob) : async* Bool {
     let ic : CanisterInfo = actor ("aaaaa-aa");
     try {
       let mine = Set.fromIter<Principal>((await ic.canister_info({ canister_id = self; num_requested_changes = null })).controllers.values(), Principal.compare);
@@ -184,6 +198,7 @@ mixin (
         let h : Ext.Helper = actor (p.toText());
         if ((await h.routerId()) != self) { return false };
         let info = await ic.canister_info({ canister_id = p; num_requested_changes = null });
+        if (info.module_hash != ?moduleHash) { return false };
         if (info.controllers.size() != mine.size()) { return false };
         for (c in info.controllers.values()) { if (not mine.contains(c)) { return false } };
       };
@@ -193,17 +208,49 @@ mixin (
 
   // Put a quarantined helper back into rotation, after its funds were returned
   // (helperRecover) and the affected orders resolved.
+  // Only once the helper is empty and ICPSwap has nothing pending or failed for it.
   public shared ({ caller }) func clearHelper(i : Nat) : async Bool {
     if (not Orders.isAdmin(state.config, caller)) { return false };
-    switch (helperAt(i)) {
-      case (?h) { rt.quarantined.remove(h); true };
-      case null { false };
+    let h = switch (helperAt(i)) { case (?h) { h }; case null { return false } };
+    if (rt.busyHelpers.contains(h)) { return false };
+    let a : Ext.Helper = actor (h.toText());
+    let ok = try { await a.settled(state.config.icpFee, state.config.nakFee) } catch (_) { false };
+    if (ok) {
+      rt.quarantined.remove(h);
+      rt.helperOrders.remove(h);
     };
+    ok;
+  };
+
+  // Run the background recovery of parked helpers now (it also runs on every tick).
+  public shared ({ caller }) func runRecovery() : async () {
+    if (not Orders.isAdmin(state.config, caller)) { return };
+    await* Engine.autoRecover(state, fees, rt, orders, active, self);
+  };
+
+  // Funds a stranger sent to a helper, set aside by the helper in the router's stray account.
+  public shared ({ caller }) func recoverStray(to : Principal) : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    if (to.isAnonymous() or to == self) { return #err("bad destination") };
+    let cfg = state.config;
+    let acct = { owner = self; subaccount = ?Account.straySubaccount };
+    var sent = { icp = 0; nak = 0 };
+    for ((isIcp, l, f) in [(true, cfg.icpLedger, cfg.icpFee), (false, cfg.nakLedger, cfg.nakFee)].values()) {
+      let ledger : Ext.Ledger = actor (l.toText());
+      let bal = await ledger.icrc1_balance_of(acct);
+      if (bal > f) {
+        switch (await ledger.icrc1_transfer({ from_subaccount = ?Account.straySubaccount; to = { owner = to; subaccount = null }; amount = bal - f; fee = ?f; memo = null; created_at_time = null })) {
+          case (#Ok _) { sent := if isIcp { { sent with icp = bal - f } } else { { sent with nak = bal - f } } };
+          case (#Err _) {};
+        };
+      };
+    };
+    #ok(sent);
   };
 
   public query ({ caller }) func helpers() : async [Types.HelperInfo] {
     if (not Orders.isOperator(state.config, caller)) { return [] };
-    rt.exec.helpers.map(func(h : Principal) : Types.HelperInfo = { helper = h; busy = rt.busyHelpers.contains(h); quarantined = rt.quarantined.contains(h) });
+    rt.exec.helpers.map(func(h : Principal) : Types.HelperInfo = { helper = h; busy = rt.busyHelpers.contains(h); quarantined = rt.quarantined.contains(h); holdsOrder = rt.helperOrders.get(h) });
   };
 
   func helperAt(i : Nat) : ?Principal {
@@ -234,7 +281,7 @@ mixin (
 
   // Helper `i` pulls anything ICPSwap holds for it and sends everything it holds to order
   // `id`'s deposit account (then resolve with forcePayout / forceRefund, fromDeposit = true),
-  // or, with no order, to the router's main account.
+  // or, with no order, to the router's stray account (recoverStray).
   public shared ({ caller }) func helperRecover(i : Nat, id : ?Nat) : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
     if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
     let h = switch (helperAt(i)) { case (?h) { h }; case null { return #err("no such helper") } };
@@ -242,24 +289,23 @@ mixin (
       case (?oid) {
         let o = switch (orders.get(oid)) { case (?o) { o }; case null { return #err("no such order") } };
         if (rt.inFlight.contains(oid)) { return #err("order is busy; try again in a minute") };
+        switch (o.status) { case (#needsReview _) {}; case _ { return #err("order is not in needs review") } };
         { owner = self; subaccount = ?o.subaccount };
       };
-      case null {
-        if (state.busy) { return #err("router is busy; try again in a minute") };
-        { owner = self; subaccount = null };
-      };
+      case null { { owner = self; subaccount = ?Account.straySubaccount } };
     };
     if (rt.busyHelpers.contains(h)) { return #err("helper is busy; try again in a minute") };
     rt.busyHelpers.add(h);
-    let toMain = id == null;
-    if (toMain) { state.busy := true };
+    switch id { case (?oid) { rt.inFlight.add(oid) }; case null {} };
     let cfg = state.config;
     try {
       let a : Ext.Helper = actor (h.toText());
-      await a.returnAll(to, cfg.nakFee, cfg.icpFee);
+      let r = await a.returnAll(to, cfg.nakFee, cfg.icpFee);
+      switch r { case (#ok _) { rt.helperOrders.remove(h) }; case (#err _) {} };
+      r;
     } catch (e) { #err(e.message()) } finally {
       rt.busyHelpers.remove(h);
-      if (toMain) { state.busy := false };
+      switch id { case (?oid) { rt.inFlight.remove(oid) }; case null {} };
     };
   };
 
@@ -336,9 +382,9 @@ mixin (
   // ICP that landed in a deposit account with no order to handle it (an order that was
   // never paired with Houdini and got cleaned up, or one already finished). Sends the whole
   // balance, minus the ledger fee, to `to`.
-  public shared ({ caller }) func recoverDeposit(id : Nat, to : Principal) : async Result.Result<Nat, Text> {
+  public shared ({ caller }) func recoverDeposit(id : Nat, to : Principal) : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
     if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
-    if (to.isAnonymous()) { return #err("anonymous destination") };
+    if (to.isAnonymous() or to == self) { return #err("bad destination") };
     let sub = switch (orders.get(id)) {
       case null {
         if (privacy.secret.size() < 24 or id >= state.nextId) { return #err("no such order") };
@@ -356,22 +402,22 @@ mixin (
       };
     };
     let cfg = state.config;
-    let ledger : Ext.Ledger = actor (cfg.icpLedger.toText());
-    let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?sub });
-    if (bal <= cfg.icpFee) { return #err("nothing to recover") };
-    switch (
-      await ledger.icrc1_transfer({
-        from_subaccount = ?sub;
-        to = { owner = to; subaccount = null };
-        amount = bal - cfg.icpFee;
-        fee = ?cfg.icpFee;
-        memo = null;
-        created_at_time = null;
-      })
-    ) {
-      case (#Ok _) { #ok(bal - cfg.icpFee) };
-      case (#Err _) { #err("ledger transfer failed") };
-    };
+    rt.inFlight.add(id);
+    var sent = { icp = 0; nak = 0 };
+    try {
+      // ICP and NAK (e.g. a partial fill's leftover ICP, or NAK left after a refund).
+      for ((isIcp, l, f) in [(true, cfg.icpLedger, cfg.icpFee), (false, cfg.nakLedger, cfg.nakFee)].values()) {
+        let ledger : Ext.Ledger = actor (l.toText());
+        let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?sub });
+        if (bal > f) {
+          switch (await ledger.icrc1_transfer({ from_subaccount = ?sub; to = { owner = to; subaccount = null }; amount = bal - f; fee = ?f; memo = null; created_at_time = null })) {
+            case (#Ok _) { sent := if isIcp { { sent with icp = bal - f } } else { { sent with nak = bal - f } } };
+            case (#Err _) {};
+          };
+        };
+      };
+    } finally { rt.inFlight.remove(id) };
+    if (sent.icp == 0 and sent.nak == 0) { #err("nothing to recover") } else { #ok(sent) };
   };
 
   // ---- NAKSwap fee ----

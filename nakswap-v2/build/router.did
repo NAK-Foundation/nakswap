@@ -34,8 +34,9 @@ type Router =
  service {
    activeOrderIds: () -> (vec nat) query;
    attachHoudini: (id: nat, houdiniId: text) -> (bool);
+   cancelUnfunded: (id: nat) -> (bool);
    clearHelper: (i: nat) -> (bool);
-   createOrder: (args: CreateOrderArgs) -> (Result_4);
+   createOrder: (args: CreateOrderArgs) -> (Result_6);
    feeStatus: () -> (FeeStatus) query;
    forcePayout: (id: nat, nakAmount: nat, fromDeposit: bool) -> (opt Status);
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
@@ -49,17 +50,19 @@ type Router =
    listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
    poke: (id: nat) -> (PokeResult);
    poolUnusedBalance: () -> (Result_1);
-   recoverDeposit: (id: nat, to: principal) -> (Result);
+   recoverDeposit: (id: nat, to: principal) -> (Result_1);
+   recoverStray: (to: principal) -> (Result_1);
    reopen: (id: nat) -> (opt Status);
    resolveStuckFees: (delivered: bool) -> (bool);
+   runRecovery: () -> ();
    setConfig: (cfg: Config) -> (bool);
    setFee: (bps: nat, to: principal) -> (bool);
-   setHelpers: (list: vec principal) -> (bool);
+   setHelpers: (list: vec principal, moduleHash: blob) -> (bool);
    setPaused: (paused: bool) -> (bool);
    sweepFees: () -> (nat);
    withdrawFromPool: (icpToken: bool, amount: nat) -> (Result);
  };
-type Result_4 = 
+type Result_6 = 
  variant {
    err: CreateOrderError;
    ok: OrderView;
@@ -109,6 +112,7 @@ type HelperInfo =
  record {
    busy: bool;
    helper: principal;
+   holdsOrder: opt nat;
    quarantined: bool;
  };
 type Health = 

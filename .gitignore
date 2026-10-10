@@ -6,3 +6,8 @@ dist/
 .pnpm-store/
 .cache/
 .icp/
+
+# NAKSwap keys: never commit
+*.pem
+*.seed
+keys/

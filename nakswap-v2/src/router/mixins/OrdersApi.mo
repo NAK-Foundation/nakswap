@@ -7,6 +7,7 @@ import Result "mo:core/Result";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Account "../../common/Account";
+import Ext "../../common/Ext";
 import Engine "../lib/Engine";
 import Guard "../lib/Guard";
 import Orders "../lib/Orders";
@@ -60,6 +61,32 @@ mixin (
       };
       case null { false };
     };
+  };
+
+  // The relay drops an order whose Houdini exchange expired or failed without paying, so
+  // abandoned orders don't hold open-order slots for the full TTL. Only with nothing in
+  // the deposit account.
+  public shared ({ caller }) func cancelUnfunded(id : Nat) : async Bool {
+    if (not Orders.isOperator(state.config, caller)) { return false };
+    let o = switch (orders.get(id)) { case (?o) { o }; case null { return false } };
+    switch (o.status) { case (#awaitingDeposit) {}; case _ { return false } };
+    if (rt.inFlight.contains(id)) { return false };
+    rt.inFlight.add(id);
+    try {
+      let ledger : Ext.Ledger = actor (state.config.icpLedger.toText());
+      let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
+      switch (o.status) {
+        case (#awaitingDeposit) {
+          if (bal == 0) {
+            // Kept as #expired (frees the open-order slot; reopen / recoverDeposit still work
+            // if Houdini delivers after all).
+            Engine.setStatus(o, active, #expired);
+            true;
+          } else { false };
+        };
+        case _ { false };
+      };
+    } finally { rt.inFlight.remove(id) };
   };
 
   // Operators and admin only: order ids are sequential, so a public getOrder would let anyone

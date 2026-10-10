@@ -15,7 +15,8 @@
 //   ... force-refund <id> <icp> main|deposit   (resolve a needs-review order with an ICP refund)
 //   ... force-payout <id> <nak> [deposit]  (pay NAK to a needs-review order's user, from main or its deposit account)
 //   ... helpers                       (swap helpers and whether each is busy)
-//   ... set-helpers id1,id2,id3       (empty string = no helpers, swap from the router as before)
+//   ... set-helpers id1,id2,id3 [helper.wasm]  (checks each runs exactly that wasm; default ../build/helper.wasm)
+//   ... recover-stray <principal>     (funds strangers sent to helpers, set aside by them)
 //   ... helper-unused <i>             (what ICPSwap holds for helper i)
 //   ... helper-withdraw <i> icp|nak <amount>   (helper i pulls it out of the pool)
 //   ... helper-recover <i> [orderId]  (helper i: pool leftovers + everything it holds -> that order's
@@ -81,11 +82,12 @@ const healthIdl = ({ IDL }) =>
     ),
     setFee: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Bool], []),
     sweepFees: IDL.Func([], [IDL.Nat], []),
-    recoverDeposit: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
+    recoverDeposit: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
+    recoverStray: IDL.Func([IDL.Principal], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     poolUnusedBalance: IDL.Func([], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     withdrawFromPool: IDL.Func([IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
-    setHelpers: IDL.Func([IDL.Vec(IDL.Principal)], [IDL.Bool], []),
-    helpers: IDL.Func([], [IDL.Vec(IDL.Record({ helper: IDL.Principal, busy: IDL.Bool, quarantined: IDL.Bool }))], ['query']),
+    setHelpers: IDL.Func([IDL.Vec(IDL.Principal), IDL.Vec(IDL.Nat8)], [IDL.Bool], []),
+    helpers: IDL.Func([], [IDL.Vec(IDL.Record({ helper: IDL.Principal, busy: IDL.Bool, quarantined: IDL.Bool, holdsOrder: IDL.Opt(IDL.Nat) }))], ['query']),
     clearHelper: IDL.Func([IDL.Nat], [IDL.Bool], []),
     helperPoolUnused: IDL.Func([IDL.Nat], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     helperWithdrawFromPool: IDL.Func([IDL.Nat, IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
@@ -164,7 +166,7 @@ if (cmd === 'health') {
   console.log('swept', Number(sent) / 1e8, 'ICP');
 } else if (cmd === 'recover') {
   const r = await router.recoverDeposit(BigInt(a), Principal.fromText(b));
-  console.log('ok' in r ? `recovered ${Number(r.ok) / 1e8} ICP to ${b}` : `not recovered: ${r.err}`);
+  console.log('ok' in r ? `recovered ${Number(r.ok.icp) / 1e8} ICP and ${Number(r.ok.nak) / 1e8} NAK to ${b}` : `not recovered: ${r.err}`);
 } else if (cmd === 'orders') {
   console.log(show(await router.listOrders(BigInt(a || 0), 100n)));
 } else if (cmd === 'pool-unused') {
@@ -182,7 +184,11 @@ if (cmd === 'health') {
   console.log(show(await router.helpers()));
 } else if (cmd === 'set-helpers') {
   const list = (a || '').split(',').map((x) => x.trim()).filter(Boolean).map((x) => Principal.fromText(x));
-  console.log('setHelpers', list.map((p) => p.toText()), await router.setHelpers(list));
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(b || new URL('../../build/helper.wasm', import.meta.url))).digest();
+  console.log('setHelpers', list.map((p) => p.toText()), 'module', hash.toString('hex'), await router.setHelpers(list, Uint8Array.from(hash)));
+} else if (cmd === 'recover-stray') {
+  const r = await router.recoverStray(Principal.fromText(a));
+  console.log('ok' in r ? `recovered ${Number(r.ok.icp) / 1e8} ICP and ${Number(r.ok.nak) / 1e8} NAK` : r.err);
 } else if (cmd === 'helper-unused') {
   console.log(show(await router.helperPoolUnused(BigInt(a))));
 } else if (cmd === 'helper-withdraw') {
@@ -199,6 +205,6 @@ if (cmd === 'health') {
   });
   console.log('freezing threshold set to', a, 'days');
 } else {
-  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | helpers | set-helpers | helper-unused | helper-withdraw | helper-recover | clear-helper | set <field> <value> | pause | unpause | freezing-days <n>');
+  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | helpers | set-helpers | helper-unused | helper-withdraw | helper-recover | clear-helper | recover-stray | set <field> <value> | pause | unpause | freezing-days <n>');
   console.log('fields:', Object.keys(FIELDS).join(', '));
 }

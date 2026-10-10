@@ -146,10 +146,12 @@ module {
     inFlight : Set.Set<Nat>; // orders with a step running right now
     busyHelpers : Set.Set<Principal>;
     quarantined : Set.Set<Principal>; // helpers that may hold someone's funds; admin clears
+    helperOrders : Map.Map<Principal, Nat>; // quarantined helper -> the order whose funds it holds
+    jobFees : Map.Map<Nat, Nat>; // order -> its 1% fee, while its funds are with a helper
     var nextHelper : Nat;
   };
 
-  public type HelperInfo = { helper : Principal; busy : Bool; quarantined : Bool };
+  public type HelperInfo = { helper : Principal; busy : Bool; quarantined : Bool; holdsOrder : ?Nat };
 
   public type FeeStatus = {
     bps : Nat;

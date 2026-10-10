@@ -83,6 +83,7 @@ module {
   // ---------- NAKSwap swap helper ----------
 
   public type HelperJob = {
+    strayTo : Account; // where unsolicited funds found in the helper are sent before starting
     from : Account; // the order's deposit account; the router has approved the helper on it
     pull : Nat; // ICP the helper takes: amountIn + its approve fee + the pool's transfer_from fee
     amountIn : Nat;
@@ -101,13 +102,16 @@ module {
     #dirty : { icp : Nat; nak : Nat };
     // `clean`: afterwards the helper holds nothing (beyond fee dust) and nothing of its is
     // left in the pool. If false the router stops using it until an admin clears it.
-    #done : { pulled : Bool; nakReturned : Nat; icpReturned : Nat; note : Text; clean : Bool };
+    // `clean` = ICPSwap finished paying out and everything was returned. If false the helper
+    // keeps what it has (nothing is sent anywhere) until an admin recovers it.
+    #done : { pulled : Bool; swapped : Bool; nakReturned : Nat; icpReturned : Nat; note : Text; clean : Bool };
   };
 
   public type Helper = actor {
     swap : shared HelperJob -> async HelperResult;
     returnAll : shared (Account, Nat, Nat) -> async { #ok : { nak : Nat; icp : Nat }; #err : Text };
     routerId : shared query () -> async Principal;
+    settled : shared (Nat, Nat) -> async Bool;
     poolUnused : shared () -> async { #ok : { icp : Nat; nak : Nat }; #err : Text };
     withdrawFromPool : shared (Bool, Nat, Nat) -> async { #ok : Nat; #err : Text };
   };
@@ -141,6 +145,9 @@ module {
     quote : shared query (SwapArgs) -> async { #ok : Nat; #err : PoolError };
     depositFromAndSwap : shared (DepositAndSwapArgs) -> async { #ok : Nat; #err : PoolError };
     getUserUnusedBalance : shared query Principal -> async { #ok : { balance0 : Nat; balance1 : Nat }; #err : PoolError };
+    // Pending and failed transactions (payouts, refunds) the pool still has for `owner`.
+    // ICPSwap pays out after its calls return; this list being empty means it's done.
+    getTransactionsByOwner : shared query Principal -> async { #ok : [(Nat, Any)]; #err : PoolError };
     withdraw : shared WithdrawArgs -> async { #ok : Nat; #err : PoolError };
   };
 };

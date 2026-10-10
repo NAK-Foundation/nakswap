@@ -44,6 +44,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   let payFromSub = Set.empty<Nat>();
   let subFees = Map.empty<Nat, Types.SubFee>();
   let quarantined = Set.empty<Principal>();
+  let helperOrders = Map.empty<Principal, Nat>();
+  let jobFees = Map.empty<Nat, Nat>();
 
   transient let self = Principal.fromActor(this);
   transient let rt : Types.Runtime = {
@@ -53,6 +55,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     inFlight = Set.empty<Nat>();
     busyHelpers = Set.empty<Principal>();
     quarantined;
+    helperOrders;
+    jobFees;
     var nextHelper = 0;
   };
 
@@ -114,7 +118,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     // Deposit checks run side by side, so with helpers several swaps proceed at once (each
     // claims a free helper; without helpers they queue on the router's lock as before).
     n := 0;
-    if (Engine.usableHelpers(rt) > 0) {
+    if (rt.exec.helpers.size() > 0) {
       let running = List.empty<async ()>();
       label deposits for (id in ordered.values()) {
         if (n >= Guard.maxPerTick) { break deposits };
@@ -131,6 +135,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
       };
     };
     await* Engine.sweepOrderFees(state, fees, rt, orders);
+    await* Engine.autoRecover(state, fees, rt, orders, active, self);
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
     forgetOldHoudiniIds(now);

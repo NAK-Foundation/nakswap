@@ -3,6 +3,8 @@
 // pulls the input with icrc2_transfer_from, and if amountOutMinimum is not met the input
 // is sent back to the caller and an error is returned.
 import Int "mo:core/Int";
+import Array "mo:core/Array";
+import Iter "mo:core/Iter";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
@@ -86,13 +88,65 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
     };
   };
 
+  // ICPSwap 3.7.0 pays out (swap output, slippage refunds) from a queue AFTER the call
+  // returns. The mock does the same: payouts are queued and paid a few messages later.
+  type Payout = { owner : Principal; nakToken : Bool; amount : Nat; fee : Nat; var failed : Bool };
+  let queue = Map.empty<Nat, Payout>();
+  var nextTx = 0;
+
+  func enqueue(owner : Principal, nakToken : Bool, amount : Nat, fee : Nat, failed : Bool) {
+    queue.add(nextTx, { owner; nakToken; amount; fee; var failed });
+    nextTx += 1;
+  };
+
+  public func noop() : async () {};
+
+  func processSoon() : async () {
+    // Let the caller run on for a few messages first, like the real queue's timer.
+    await noop();
+    await noop();
+    await noop();
+    await* processQueue();
+  };
+
+  func processQueue() : async* () {
+    for ((id, p) in queue.entries().toArray().values()) {
+      // Still queued (a concurrent run may have paid it already) and not failed.
+      if (queue.containsKey(id) and not p.failed) {
+        p.failed := true; // in progress: a concurrent run skips it
+        let l : Ext.Ledger = actor ((if (p.nakToken) { nakLedger } else { icpLedger }).toText());
+        // Like ICPSwap 3.7.0: the transaction is deleted only after the transfer succeeded.
+        let r = await l.icrc1_transfer({
+          from_subaccount = null;
+          to = { owner = p.owner; subaccount = null };
+          amount = (p.amount - p.fee : Int).toNat();
+          fee = ?p.fee;
+          memo = null;
+          created_at_time = null;
+        });
+        switch r { case (#Ok _) { queue.remove(id) }; case (#Err _) {} };
+      };
+    };
+  };
+
+  // Test hook: an ICPSwap admin retries the failed payouts.
+  public func retryFailed() : async () {
+    for (p in queue.values()) { p.failed := false };
+    await* processQueue();
+  };
+
+  public query func getTransactionsByOwner(owner : Principal) : async { #ok : [(Nat, Text)]; #err : Ext.PoolError } {
+    var out : [(Nat, Text)] = [];
+    for ((id, p) in queue.entries()) { if (p.owner == owner) { out := out.concat([(id, "payout")]) } };
+    #ok(out);
+  };
+
   public shared ({ caller }) func depositFromAndSwap(args : Ext.DepositAndSwapArgs) : async { #ok : Nat; #err : Ext.PoolError } {
     if (args.zeroForOne != icpIsToken0) { return #err(#UnsupportedToken("mock only swaps ICP -> NAK")) };
     let amountIn = args.amountIn.toNat() ?? (return #err(#InternalError("bad amountIn")));
     let minOut = args.amountOutMinimum.toNat() ?? (return #err(#InternalError("bad amountOutMinimum")));
     let self = Principal.fromActor(this);
     let icp : IcpLedger = actor (icpLedger.toText());
-    let nak : Ext.Ledger = actor (nakLedger.toText());
 
     // Deposit.
     switch (
@@ -107,44 +161,25 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
       })
     ) {
       case (#Ok _) {};
-      case (#Err _) { return #err(#InsufficientFunds) };
-    };
-
-    if (breakNextSwap) {
-      // Simulates "deposit succeeded, withdraw failed": funds stay in the pool.
-      breakNextSwap := false;
-      unusedIcp.add(caller, (unusedIcp.get(caller) ?? 0) + amountIn);
-      return #err(#InternalError("withdraw failed"));
+      case (#Err _) { return #err(#InternalError("deposit failed")) };
     };
 
     let amountOut = out(amountIn);
     if (amountOut < minOut) {
-      ignore await icp.icrc1_transfer({
-        from_subaccount = null;
-        to = { owner = caller; subaccount = null };
-        amount = (amountIn - args.tokenInFee : Int).toNat();
-        fee = ?args.tokenInFee;
-        memo = null;
-        created_at_time = null;
-      });
-      return #err(#InternalError("slippage over range: " # amountOut.toText() # " < " # minOut.toText()));
+      // Refunded later, minus the transfer fee.
+      enqueue(caller, false, amountIn, args.tokenInFee, false);
+      ignore processSoon();
+      return #err(#InternalError("Slippage check failed: " # amountOut.toText() # " < " # minOut.toText()));
     };
 
     icpReserve += amountIn;
     nakReserve := (nakReserve - amountOut : Int).toNat();
-    // Withdraw: the caller receives amountOut minus the NAK transfer fee.
-    switch (
-      await nak.icrc1_transfer({
-        from_subaccount = null;
-        to = { owner = caller; subaccount = null };
-        amount = (amountOut + bonusNextSwap - args.tokenOutFee : Int).toNat();
-        fee = ?args.tokenOutFee;
-        memo = null;
-        created_at_time = null;
-      })
-    ) {
-      case (#Ok _) { bonusNextSwap := 0; #ok(amountOut) };
-      case (#Err _) { #err(#InternalError("withdraw failed")) };
-    };
+    // The output is paid later; with the test hook the payout fails and waits for an admin.
+    let failed = breakNextSwap;
+    breakNextSwap := false;
+    enqueue(caller, true, amountOut + bonusNextSwap, args.tokenOutFee, failed);
+    bonusNextSwap := 0;
+    ignore processSoon();
+    #ok(amountOut);
   };
 };

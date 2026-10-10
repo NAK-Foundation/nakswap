@@ -11,11 +11,18 @@ actor class Stranger() {
     sweepFees : shared () -> async Nat;
     poke : shared Nat -> async Types.PokeResult;
     getOrder : shared query Nat -> async ?Types.OrderView;
+    cancelUnfunded : shared Nat -> async Bool;
+  };
+
+  public func tryCancel(router : Principal, id : Nat) : async Bool {
+    let r : RouterApi = actor (router.toText());
+    await r.cancelUnfunded(id);
   };
 
   public func trySwap(helper : Principal) : async Ext.HelperResult {
     let h : Ext.Helper = actor (helper.toText());
     await h.swap({
+      strayTo = { owner = helper; subaccount = null };
       from = { owner = helper; subaccount = null };
       pull = 1;
       amountIn = 1;

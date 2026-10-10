@@ -12,6 +12,7 @@ type HelperResult =
       nakReturned: nat;
       note: text;
       pulled: bool;
+      swapped: bool;
     };
    notAuthorized;
  };
@@ -24,6 +25,7 @@ type HelperJob =
    nakFee: nat;
    pull: nat;
    returnTo: Account;
+   strayTo: Account;
    zeroForOne: bool;
  };
 type Helper = 
@@ -44,6 +46,7 @@ type Helper =
            };
      });
    routerId: () -> (principal) query;
+   settled: (icpFee: nat, nakFee: nat) -> (bool);
    swap: (job: HelperJob) -> (HelperResult);
    withdrawFromPool: (icpToken: bool, amount: nat, fee: nat) ->
     (variant {

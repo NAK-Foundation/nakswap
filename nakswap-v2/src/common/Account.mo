@@ -43,6 +43,10 @@ module {
     self.toLedgerAccount(?input);
   };
 
+  // Router subaccount where helpers set aside funds a stranger sent them (so those can never
+  // be mixed into an order). Admin: recoverStray.
+  public let straySubaccount : Blob = "\4E\41\4B\53\57\41\50\2D\53\54\52\41\59\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\01";
+
   // Per-order memo for payouts and refunds: random-looking (derived from the private deposit
   // subaccount), so it reveals nothing on chain, but unique per order so two orders paying
   // the same amount to the same principal in the same moment are never deduplicated.

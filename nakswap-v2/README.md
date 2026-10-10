@@ -47,17 +47,31 @@ so up to three swaps proceed at once:
 | helper 2 | `bamxv-2iaaa-aaaab-qhmba-cai` |
 
 Per order: the router approves a free helper on the order's deposit account (5-minute
-allowance), the helper pulls the ICP, approves the pool, swaps, and sends everything it holds
-back to that same deposit account; the router settles from that account alone and pays NAK
-(or refunds ICP) from it. The 1% fee stays there until it's swept to the fee wallet. Nothing
-passes through the router's main account, so swaps can't mix.
+allowance), the helper pulls the ICP, approves the pool and swaps. **ICPSwap (3.7.0) pays the
+NAK, or refunds the ICP, from a queue after `depositFromAndSwap` returns**, and deletes the
+transaction only once its ledger transfer succeeded; so the helper waits until
+`getTransactionsByOwner(helper)` is empty and its unused balance is zero, then sends
+everything it holds back to the order's deposit account. The router settles from what the
+helper reports (dust sent to the deposit account by anyone changes nothing) and pays NAK, or
+refunds ICP, from that account. The 1% fee stays there until it's swept to the fee wallet.
+Nothing passes through the router's main account, so swaps can't mix.
 
-Safety: a helper refuses work while it holds anything from an earlier job; if a swap fails
-it pulls its own leftovers out of ICPSwap before returning; any unclear result quarantines
-the helper (out of rotation until an admin returns its funds with `helper-recover` and runs
-`clear-helper`). If every helper is quarantined the router falls back to swapping from its
-own account, one at a time. `setHelpers` is controller-only and accepts only canisters
-built for this router with exactly the router's controllers.
+Safety:
+- A helper refuses work unless its last job ended clean and ICPSwap has nothing pending for
+  it. Funds a stranger sends to a helper are set aside to the router's stray account
+  (`recover-stray`) before the next job, never mixed into an order.
+- If ICPSwap hasn't finished paying out within the wait (or a payout failed on ICPSwap's side),
+  the helper keeps everything together, is quarantined and linked to that order, and the order
+  waits in "needs review". The worker retries on every tick: as soon as ICPSwap is done, the
+  helper hands the funds to the order, goes back into rotation, and the order is paid out or
+  refunded automatically. A failed ICPSwap payout needs ICPSwap's admin to retry it (failed
+  transactions are kept 30 days); after that recovery is automatic.
+- Any result that doesn't match the order (wrong amount, NAK and ICP both back) parks it the
+  same way. While helpers are configured the router never swaps through its own account.
+- `setHelpers` is controller-only and checks each helper's module hash (`build/helper.wasm`),
+  that it was built for this router, and that its controllers equal the router's. Re-run
+  `set-helpers` after upgrading the helpers.
+- Upgrades: pause the router, upgrade the helpers, upgrade the router, `set-helpers`, unpause.
 
 Helpers need cycles like the router: add them to CycleOps (the balance checker is already
 a controller of each).
@@ -65,7 +79,8 @@ a controller of each).
 ## NAKSwap fee
 
 1% of the ICP that Houdini delivers to the deposit account (`setFee`, max 5%). The router swaps
-`ICP − 1% − 3 ledger fees` for NAK and the 1% stays in its main account. It is counted as
+`ICP − 1% − 4 ledger fees` for NAK (3 without helpers) and the 1% stays in the order's
+deposit account (the router's main account without helpers). It is counted as
 earned only when the swap produces NAK; if the swap is refunded, the user gets the full
 amount back and no fee is taken. Earned fees are swept to the fee wallet (default: the admin
 principal) once they reach 0.05 ICP, or on demand with `sweepFees`. The relay reads the rate
@@ -102,7 +117,9 @@ anything unexpected → needsReview   (funds are never guessed at; admin uses fo
 ```
 
 Safety rails:
-- One swap at a time (`busy` lock), so balance changes on the router's main account belong to exactly one order. Payouts are computed from balance deltas, not from the pool's return value.
+- With helpers: each swap is settled in its own deposit account (see "Swap helpers").
+  Without helpers: one swap at a time (`busy` lock) through the router's main account, settled
+  from balance deltas once ICPSwap has finished paying out.
 - Price check right before the swap: refund if impact > `maxImpactBps`, otherwise `amountOutMinimum` = quote − `slippageBps` (or the user's `minNakOut` if higher).
 - Payouts and refunds use a fixed `created_at_time` + memo, so a retry is deduplicated by the ledger instead of paying twice.
 - Only `operators` (the relay) can open orders; `poke` is public but throttled to once per 10 s per order.
@@ -149,7 +166,9 @@ Houdini can "pay", then `cd relay && cp .env.example .env && npm start`.
 2. Houdini partner key (partner portal) — the relay only.
 3. NAKSwap fee: 1%, see above.
 4. Router config: `maxOrderIcp` / `maxImpactBps` sized to pool depth; consider raising depth before advertising.
-5. ICPSwap can queue withdrawals; a swap that lands in `needsReview` with nothing back usually means NAK is in the pool's withdraw queue / unused balance for the router.
+5. ICPSwap 3.7.0 pays out from a queue after its calls return (handled: helpers wait for it). A
+   payout that fails on ICPSwap's side stays as a failed transaction for 30 days and only
+   ICPSwap's admin can retry it; the order waits in "needs review" until then.
 6. Switch the canister to the mops migration chain before first mainnet deploy so later upgrades are safe.
 
 ## Operating the live router
@@ -193,7 +212,12 @@ node scripts/router-admin.mjs pool-unused                 # did ICPSwap keep any
 node scripts/router-admin.mjs pool-withdraw icp 1.25      # pull it back to the router (or nak)
 node scripts/router-admin.mjs force-payout <id> <NAK>     # pay the user NAK from the router
 node scripts/router-admin.mjs force-refund <id> <ICP> main|deposit   # or refund ICP instead
-node scripts/router-admin.mjs recover <id> <principal>    # ICP in a finished/deleted order's deposit account
+node scripts/router-admin.mjs recover <id> <principal>    # ICP + NAK left in a finished/deleted order's deposit account
+node scripts/router-admin.mjs helpers                     # which helper is quarantined, and which order it holds
+node scripts/router-admin.mjs helper-recover <i> <id>     # helper i -> that order's deposit account (automatic on each tick too)
+node scripts/router-admin.mjs force-payout <id> <NAK> deposit   # pay from the order's deposit account
+node scripts/router-admin.mjs clear-helper <i>            # back into rotation (only once it's empty)
+node scripts/router-admin.mjs recover-stray <principal>   # funds strangers sent to helpers
 ```
 
 Guards: `force-refund` from main can't touch the fees owed to the fee wallet and is capped by
@@ -207,9 +231,11 @@ What is and isn't private: everything on the ICP and NAK ledgers is public, so t
 payout to a principal is visible to anyone. What NAKSwap does to keep the rest unlinkable:
 - **Private route**: Houdini's private route uses two separate swaps, so the sending wallet
   isn't linked on-chain to the ICP. The page remembers the visitor's route choice.
-- **Unlinkable deposit accounts**: each order's deposit subaccount is a keyed hash of the
+- **Unguessable deposit accounts**: each order's deposit subaccount is a keyed hash of the
   order id under a random secret the router fetched from the IC (`raw_rand`). Outsiders can't
-  enumerate the router's deposit accounts or match one to an order number.
+  list them in advance or match one to an order number. Once a deposit account is used, its
+  ledger activity (the approval to a helper, the payout from it) is public like any transfer,
+  so the ICP that arrived and the principal paid can be linked on-chain.
 - **No order numbers on chain**: sweeps, approvals, payouts and refunds carry no memo.
 - **Forgetting**: 30 days after an order finishes, the router drops its Houdini order id (the
   link back to the sending wallet). Orders never paired with Houdini are deleted after 15 min.
@@ -232,7 +258,9 @@ Router (`src/router/main.mo`, `lib/Guard.mo`):
   stay public queries, which are free for the canister.
 - At most 150 open orders. The worker pays out and refunds first, then checks each waiting
   deposit at most once a minute, least recently checked first, 10 per tick.
-- Orders the relay never paired with a Houdini exchange are deleted after 15 minutes.
+- Orders the relay never paired with a Houdini exchange are deleted after 15 minutes; the
+  relay cancels (expires) orders whose Houdini exchange expired or failed without a deposit,
+  and caps open unpaid orders at 5 per visitor.
 - Balance sanity check after every swap: more NAK than quoted (+2%) or more ICP back than
   deposited parks the order for review instead of paying someone else's funds.
 - Approvals to the pool expire after 5 minutes; payouts/refunds carry a per-order memo so two

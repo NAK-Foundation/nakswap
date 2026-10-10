@@ -371,7 +371,7 @@
     return FORMATS[c] || (c === 'xlm' ? FORMATS.xlm : null);
   }
 
-  let health = null, token = null, routes = [], chosen = null, quotedAt = 0, quoteSeq = 0, pollTimer = null, lastQuoteErr = '';
+  let health = null, token = null, routes = [], chosen = null, quotedAt = 0, quoteSeq = 0, pollTimer = null, lastQuoteErr = '', quoting = false;
 
   const iconHtml = (t) => (t && t.icon ? `<img src="${esc(t.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc((t?.symbol || '?').slice(0, 1)));
 
@@ -487,8 +487,9 @@
   async function getQuote() {
     const amount = $('amount').value.trim().replace(',', '.');
     $('quoteErr').textContent = ''; lastQuoteErr = '';
-    if (!token || !(Number(amount) > 0)) { clearQuote('Enter an amount to see a rate.'); updateSwapBtn(); return; }
+    if (!token || !(Number(amount) > 0)) { quoteSeq++; quoting = false; clearQuote('Enter an amount to see a rate.'); updateSwapBtn(); return; }
     const seq = ++quoteSeq;
+    quoting = true;
     $('receiveHint').textContent = 'Getting a quote…';
     $('swapBtn').textContent = 'Getting quote…'; $('swapBtn').disabled = true;
     try {
@@ -505,6 +506,7 @@
       clearQuote(e.message);
       lastQuoteErr = e.message;
     }
+    if (seq === quoteSeq) quoting = false;
     updateAmountHint();
     updateSwapBtn();
   }
@@ -547,7 +549,8 @@
     if (!token) { label = 'Choose a token'; ok = false; }
     else if (!(Number($('amount').value) > 0)) { label = 'Enter an amount'; ok = false; }
     else if (lastQuoteErr) { label = 'Adjust the amount'; ok = false; }
-    else if (!chosen) { label = routes.length ? 'No available route' : 'Getting quote…'; ok = false; }
+    else if (quoting) { label = 'Getting quote…'; ok = false; }
+    else if (!chosen) { label = routes.length ? 'No available route' : 'No route for this token'; ok = false; }
     else if (!looksLikePrincipal(rec)) { label = 'Enter your ICP principal'; ok = false; }
     else if (chosen.requiresRefundAddress && !$('refund').value.trim()) { label = 'This route needs a refund address'; ok = false; }
     else if ($('refund').value.trim() && !checkRefund()) { label = 'Check the refund address'; ok = false; }

@@ -213,7 +213,10 @@ export function createApp({
       const why = tried.map((q) => (typeof q.error === 'string' ? q.error : q.error?.message)).find(Boolean);
       unavailable.push({
         type,
-        reason: min && Number(amount) < min ? `needs at least ${min} for this token` : why || (tried.length ? 'no route at this amount right now' : 'Houdini has no route of this type for this token'),
+        reason: min && Number(amount) < min ? `needs at least ${min} for this token` : why ||
+            (type === 'private'
+              ? 'Houdini didn’t offer one at this amount. Private routes usually need a larger swap, often $40 or more'
+              : 'Houdini didn’t offer one at this amount right now'),
       });
     }
     const routes = [];

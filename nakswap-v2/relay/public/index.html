@@ -207,7 +207,7 @@
 
     <h2>Before you swap</h2>
     <table class="spec" id="limits">
-      <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap<small>Houdiniswap won't quote below this. Some tokens and routes ask for more; the quote tells you.</small></td></tr>
+      <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap<small>Houdiniswap won't quote below this. Private routes usually need more, often $40 or so; the quote tells you.</small></td></tr>
       <tr><th scope="row">Maximum</th><td id="limMax">30 ICP per swap<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small></td></tr>
       <tr><th scope="row">NAKSwap fee</th><td id="limFee">1% of the ICP<small>Taken from the ICP Houdiniswap delivers, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small></td></tr>
       <tr><th scope="row">Price guard</th><td id="limImpact">5% price impact<small>If a swap would move the NAK price more than this, you get ICP back instead.</small></td></tr>
@@ -395,7 +395,7 @@
       $('setupNotice').hidden = !msgs.length;
       $('setupNotice').textContent = msgs.join(' ');
       const g = health.guide || {};
-      $('limMin').innerHTML = `${usd(g.minUsd || 25)} per swap<small>Houdiniswap won't quote below this. Some tokens and routes ask for more; the quote tells you.</small>`;
+      $('limMin').innerHTML = `${usd(g.minUsd || 25)} per swap<small>Houdiniswap won't quote below this. Private routes usually need more, often $40 or so; the quote tells you.</small>`;
       $('limMax').innerHTML = `${fmt(g.maxOrderIcp, 2)} ICP per swap${g.maxUsd ? `, about ${usd(g.maxUsd)}` : ''}<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small>`;
       const feePct = health.fee ? health.fee.pct : 1;
       $('limFee').innerHTML = `${fmt(feePct, 2)}% of the ICP<small>Taken from the ICP Houdiniswap delivers, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small>`;

@@ -376,6 +376,7 @@
     return FORMATS[c] || (c === 'xlm' ? FORMATS.xlm : null);
   }
 
+  let lastUnavailable = [];
   let health = null, token = null, routes = [], chosen = null, quotedAt = 0, quoteSeq = 0, pollTimer = null, lastQuoteErr = '', quoting = false;
 
   const iconHtml = (t) => (t && t.icon ? `<img src="${esc(t.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc((t?.symbol || '?').slice(0, 1)));
@@ -509,7 +510,7 @@
       const refund = $('refund').value.trim();
       const q = await api('/api/quote', { fromId: token.id, amount, refundAddress: refund && checkRefund() ? refund : undefined });
       if (seq !== quoteSeq) return;
-      routes = q.routes; quotedAt = q.quotedAt;
+      routes = q.routes; quotedAt = q.quotedAt; lastUnavailable = q.unavailable || [];
       // Keep the route type the visitor picked last time (e.g. Private), on this device.
       const prevType = chosen?.type || store.get('nak.route', null);
       chosen = routes.find((r) => !r.blocked && r.type === prevType) || routes.find((r) => !r.blocked) || null;
@@ -540,8 +541,13 @@
         <span>${r.type === 'private' ? 'Two separate swaps, so the wallet you send from isn’t linked on-chain to the ICP.' : 'One hop, fastest.'} About ${esc(r.etaMinutes)} min via ${esc(r.provider)}.</span>
         <span class="nak">${fmt(e8(r.nakOut), 0)} NAK</span>
         ${r.blocked ? `<span class="why">Unavailable: ${esc(r.blocked)}</span>` : ''}
+      </button>`).join('') + (lastUnavailable || []).map((u) => `
+      <button class="route" type="button" disabled aria-disabled="true">
+        <i class="dot"></i>
+        <b>${u.type === 'private' ? 'Private' : 'Standard'}</b>
+        <span class="why">Not available for this swap: ${esc(u.reason)}.</span>
       </button>`).join('');
-    $('routes').querySelectorAll('.route').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; store.set('nak.route', chosen.type); renderQuote(amount); updateAmountHint(); updateSwapBtn(); }));
+    $('routes').querySelectorAll('.route:not([disabled])').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; store.set('nak.route', chosen.type); renderQuote(amount); updateAmountHint(); updateSwapBtn(); }));
     const r = chosen || routes[0];
     $('receiveAmt').textContent = `${fmt(e8(r.nakOut), 0)}`;
     $('receiveHint').textContent = r.blocked ? `Can't swap this amount: ${r.blocked}.` : `Minimum after 1% slippage: ${fmt(e8(r.minNakOut), 0)} NAK`;

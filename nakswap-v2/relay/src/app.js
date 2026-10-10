@@ -203,6 +203,19 @@ export function createApp({
       if (!cur || Number(q.amountOut) > Number(cur.amountOut)) best.set(q.type, q);
     }
     const quotes = [...best.values()];
+    // Route types Houdini didn't give a usable quote for, with its reason when it gave one,
+    // so the page can say why (e.g. Private needs a larger amount) instead of hiding it.
+    const unavailable = [];
+    for (const type of ['standard', 'private']) {
+      if (best.has(type)) continue;
+      const tried = all.filter((q) => q.type === type);
+      const min = tried.map((q) => Number(q.min)).filter((n) => n > 0).sort((x, y) => x - y)[0];
+      const why = tried.map((q) => (typeof q.error === 'string' ? q.error : q.error?.message)).find(Boolean);
+      unavailable.push({
+        type,
+        reason: min && Number(amount) < min ? `needs at least ${min} for this token` : why || (tried.length ? 'no route at this amount right now' : 'Houdini has no route of this type for this token'),
+      });
+    }
     const routes = [];
     for (const q of quotes) {
       const icpE8s = BigInt(Math.floor(Number(q.amountOut) * 1e8));
@@ -236,6 +249,7 @@ export function createApp({
     });
     const result = {
       routes,
+      unavailable,
       quotedAt: Date.now(),
       router: { ready: Boolean(ic.routerId), slippageBps: cfg.slippageBps, maxImpactBps: cfg.maxImpactBps },
     };

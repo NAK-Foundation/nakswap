@@ -72,7 +72,7 @@ export function createHoudini({ apiKey, apiSecret, fetchImpl = fetch, base = BAS
     // Houdini's `term` matches names loosely (e.g. "usdt" misses Tether), so a symbol-like
     // term is also looked up by exact symbol and the two result sets are merged.
     async searchTokens(term, user) {
-      const base = { hasCex: true, mainnet: true, page: 1 };
+      const base = { hasCex: true, page: 1 };
       const lookups = [call('GET', '/tokens', { query: { ...base, term: term || undefined, pageSize: term ? 30 : 60 }, user })];
       if (term && /^[a-z0-9.]{2,12}$/i.test(term)) {
         lookups.push(call('GET', '/tokens', { query: { ...base, symbol: term.toUpperCase(), pageSize: 30 }, user }));

@@ -1,0 +1,20 @@
+[toolchain]
+moc = "1.15.1"
+
+[dependencies]
+core = "2.6.2"
+
+[moc]
+args = ["--default-persistent-actors", "-W=M0223,M0236,M0237"]
+
+[canisters.router]
+main = "src/router/main.mo"
+
+[canisters.mock_icp_ledger]
+main = "src/mocks/MockLedger.mo"
+
+[canisters.mock_nak_ledger]
+main = "src/mocks/MockLedger.mo"
+
+[canisters.mock_pool]
+main = "src/mocks/MockSwapPool.mo"

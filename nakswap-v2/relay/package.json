@@ -1,0 +1,17 @@
+{
+  "name": "nakswap-v2-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Holds the Houdini partner key, opens router orders, and pairs them with Houdini exchanges.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@icp-sdk/core": "^6.1.0"
+  }
+}

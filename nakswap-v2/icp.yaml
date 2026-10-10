@@ -1,0 +1,16 @@
+# Local, isolated deployment: router + mock ICP ledger + mock NAK ledger + mock ICPSwap pool.
+# Init args reference each other's canister ids, so create the canisters first, then
+# install with args (see README "Local replica").
+canisters:
+  - name: router
+    recipe:
+      type: "@dfinity/motoko@v5.0.0"
+  - name: mock_icp_ledger
+    recipe:
+      type: "@dfinity/motoko@v5.0.0"
+  - name: mock_nak_ledger
+    recipe:
+      type: "@dfinity/motoko@v5.0.0"
+  - name: mock_pool
+    recipe:
+      type: "@dfinity/motoko@v5.0.0"

@@ -1,0 +1,41 @@
+import Array "mo:core/Array";
+import Principal "mo:core/Principal";
+import Time "mo:core/Time";
+import Account "../../common/Account";
+import Types "../types";
+
+module {
+
+  public func create(id : Nat, self : Principal, args : Types.CreateOrderArgs) : Types.Order {
+    let sub = Account.orderSubaccount(id);
+    {
+      id;
+      recipient = args.recipient;
+      refundTo = args.refundTo ?? args.recipient;
+      minNakOut = args.minNakOut ?? 0;
+      createdAt = Time.now();
+      subaccount = sub;
+      depositAccountId = Account.accountId(self, ?sub);
+      var houdiniId = null;
+      var status = #awaitingDeposit;
+      var lastCheckedAt = 0;
+    };
+  };
+
+  public func toView(self : Types.Order) : Types.OrderView {
+    {
+      id = self.id;
+      recipient = self.recipient;
+      refundTo = self.refundTo;
+      minNakOut = self.minNakOut;
+      createdAt = self.createdAt;
+      depositAccountId = Account.toHex(self.depositAccountId);
+      houdiniId = self.houdiniId;
+      status = self.status;
+    };
+  };
+
+  public func isOperator(cfg : Types.Config, caller : Principal) : Bool {
+    caller == cfg.admin or cfg.operators.any(func p = p == caller);
+  };
+};

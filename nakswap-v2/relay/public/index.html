@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NAKSwap</title>
+<meta name="description" content="Swap almost any token into NAK. Houdini converts it to ICP, then the NAKSwap router buys NAK on ICPSwap and sends it to your ICP principal.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0d1320;
+    --panel: #151d2c;
+    --panel-2: #1b2537;
+    --line: #283550;
+    --text: #e6ebf4;
+    --muted: #8f9bb3;
+    --brass: #c9a54c;
+    --brass-soft: rgba(201, 165, 76, .14);
+    --ok: #54b58a;
+    --warn: #e0a33a;
+    --bad: #e06767;
+    --radius-l: 18px;
+    --radius-s: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--ink); color: var(--text); }
+  body {
+    font: 15px/1.5 "Instrument Sans", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    background:
+      radial-gradient(1200px 500px at 50% -200px, rgba(201, 165, 76, .08), transparent 70%),
+      var(--ink);
+  }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; }
+  .muted { color: var(--muted); }
+
+  header {
+    max-width: 1080px; margin: 0 auto; padding: 22px 16px 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 18px; letter-spacing: .01em; }
+  .brand svg { flex: none; }
+  .live-pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); font-size: 13px;
+  }
+  .live-pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(84,181,138,.2); }
+  .live-pill.off i { background: var(--warn); box-shadow: 0 0 0 3px rgba(224,163,58,.2); }
+
+  main { max-width: 480px; margin: 0 auto; padding: 28px 16px 64px; }
+  h1 { font-size: 28px; line-height: 1.15; font-weight: 600; margin: 0 0 6px; letter-spacing: -.01em; }
+  .lede { margin: 0 0 22px; color: var(--muted); max-width: 44ch; }
+
+  .notice {
+    border: 1px solid rgba(224,163,58,.35); background: rgba(224,163,58,.08);
+    border-radius: var(--radius-s); padding: 10px 12px; margin-bottom: 16px; font-size: 14px;
+  }
+  .notice.bad { border-color: rgba(224,103,103,.4); background: rgba(224,103,103,.08); }
+  .notice[hidden] { display: none; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-l); padding: 16px; }
+  .field { background: var(--panel-2); border: 1px solid transparent; border-radius: var(--radius-s); padding: 12px 14px; }
+  .field:focus-within { border-color: var(--line); }
+  .field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .amount {
+    flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 26px; font-weight: 500; padding: 0;
+  }
+  .amount::placeholder { color: #4b5873; }
+  .text-in { width: 100%; background: none; border: 0; outline: none; padding: 0; }
+  .text-in::placeholder { color: #56637d; }
+  .token-btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px 7px 7px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line); cursor: pointer; white-space: nowrap;
+  }
+  .token-btn:hover { border-color: var(--brass); }
+  .ticon {
+    width: 26px; height: 26px; border-radius: 50%; background: var(--line); flex: none; display: grid; place-items: center;
+    font-size: 11px; font-weight: 600; overflow: hidden;
+  }
+  .ticon img { width: 100%; height: 100%; object-fit: cover; }
+  .chain { font-size: 12px; color: var(--muted); }
+  .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .field input { min-width: 0; }
+
+  /* The route rail: the two legs of the swap, drawn as one line from token to NAK. */
+  .rail { position: relative; margin: 16px 0 4px; padding-left: 26px; }
+  .rail::before {
+    content: ""; position: absolute; left: 8px; top: 10px; bottom: 10px; width: 2px;
+    background: linear-gradient(var(--line), var(--line));
+  }
+  .rail.lit-1::before { background: linear-gradient(var(--brass) 50%, var(--line) 50%); }
+  .rail.lit-2::before { background: var(--brass); }
+  .stop { position: relative; padding: 4px 0 12px; }
+  .stop:last-child { padding-bottom: 0; }
+  .stop::before {
+    content: ""; position: absolute; left: -23px; top: 9px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--ink); border: 2px solid var(--line);
+  }
+  .stop.done::before { background: var(--brass); border-color: var(--brass); }
+  .stop.active::before { border-color: var(--brass); animation: pulse 1.6s ease-in-out infinite; }
+  .stop.fail::before { background: var(--bad); border-color: var(--bad); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px var(--brass-soft); } }
+  @media (prefers-reduced-motion: reduce) { .stop.active::before { animation: none; } }
+  .stop .big { font-size: 17px; font-weight: 600; }
+  .stop .sub { font-size: 13px; color: var(--muted); }
+
+  .routes { display: grid; gap: 6px; margin-top: 12px; }
+  .route {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; text-align: left;
+    padding: 10px 12px; border-radius: var(--radius-s); border: 1px solid var(--line); background: none; cursor: pointer;
+  }
+  .route[aria-pressed="true"] { border-color: var(--brass); background: var(--brass-soft); }
+  .route:disabled { cursor: not-allowed; opacity: .55; }
+  .route .kind { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .route .why { grid-column: 1 / -1; font-size: 12px; color: var(--warn); }
+
+  .facts { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 13px; margin-top: 12px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; text-align: right; }
+
+  .primary {
+    width: 100%; margin-top: 14px; padding: 14px; border-radius: var(--radius-s); border: 0; cursor: pointer;
+    background: var(--brass); color: #1a1407; font-weight: 600; font-size: 16px;
+  }
+  .primary:disabled { background: var(--panel-2); color: var(--muted); cursor: not-allowed; }
+  .ghost {
+    background: none; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px 12px; cursor: pointer;
+  }
+  .ghost:hover { border-color: var(--brass); }
+  .err { color: var(--bad); font-size: 13px; margin-top: 8px; min-height: 1px; }
+
+  .deposit { margin: 14px 0; padding: 14px; border-radius: var(--radius-s); background: var(--panel-2); }
+  .deposit .amt { font-size: 22px; font-weight: 600; }
+  .addr { word-break: break-all; margin: 8px 0; }
+  .copy { font-size: 13px; padding: 4px 10px; }
+
+  .track { margin-top: 26px; display: flex; gap: 8px; }
+  .track input { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 9px 12px; }
+  .recent { margin-top: 10px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .recent a { color: var(--muted); }
+
+  dialog {
+    width: min(440px, calc(100vw - 32px)); max-height: min(620px, calc(100vh - 64px)); padding: 0;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-l);
+  }
+  dialog::backdrop { background: rgba(5, 8, 14, .7); }
+  .dlg-head { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .dlg-head input { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px 12px; }
+  .tlist { overflow: auto; max-height: 460px; padding: 6px; }
+  .titem { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 0; background: none; border-radius: var(--radius-s); cursor: pointer; text-align: left; }
+  .titem:hover, .titem:focus-visible { background: var(--panel-2); }
+  .titem .nm { font-size: 13px; color: var(--muted); }
+
+  footer { text-align: center; color: #5d6a84; font-size: 12px; padding: 0 16px 28px; }
+  @media (max-width: 420px) { h1 { font-size: 24px; } .amount { font-size: 22px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+      <circle cx="14" cy="14" r="13" fill="none" stroke="#c9a54c" stroke-width="2"/>
+      <path d="M9 19V9l10 10V9" fill="none" stroke="#e6ebf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    NAKSwap
+  </div>
+  <span class="live-pill off" id="livePill"><i></i><span id="liveText">Checking…</span></span>
+</header>
+
+<main>
+  <section id="swapView">
+    <h1>Swap anything into NAK</h1>
+    <p class="lede">Houdini converts your token to ICP, then the NAKSwap router buys NAK on ICPSwap and sends it to your ICP principal. No wallet connection needed.</p>
+
+    <div class="notice" id="setupNotice" hidden></div>
+    <div class="notice">Live test: real funds move. Start with a small amount.</div>
+
+    <div class="card">
+      <div class="stack">
+        <div class="field">
+          <label for="amount">You send</label>
+          <div class="row">
+            <input id="amount" class="amount" inputmode="decimal" placeholder="0.0" autocomplete="off">
+            <button class="token-btn" id="tokenBtn" type="button" aria-haspopup="dialog">
+              <span class="ticon" id="tokenIcon">?</span>
+              <span><span id="tokenSym">Choose token</span><br><span class="chain" id="tokenChain"></span></span>
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="recipient">NAK goes to (your ICP principal)</label>
+          <input id="recipient" class="text-in mono" placeholder="xxxxx-xxxxx-…-cai or -qe" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="refund">Refund address on the sending chain (recommended)</label>
+          <input id="refund" class="text-in mono" placeholder="Where Houdini returns your token if its leg fails" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+
+      <div id="quoteBox" hidden>
+        <div class="rail" id="quoteRail">
+          <div class="stop"><div class="big" id="qSend"></div><div class="sub" id="qSendSub"></div></div>
+          <div class="stop"><div class="big" id="qIcp"></div><div class="sub" id="qIcpSub"></div></div>
+          <div class="stop"><div class="big" id="qNak"></div><div class="sub" id="qNakSub"></div></div>
+        </div>
+        <div class="routes" id="routes" role="group" aria-label="Houdini routes"></div>
+        <dl class="facts" id="facts"></dl>
+      </div>
+      <div class="err" id="quoteErr" role="alert"></div>
+      <button class="primary" id="swapBtn" type="button" disabled>Swap</button>
+    </div>
+
+    <form class="track" id="trackForm">
+      <input id="trackId" inputmode="numeric" placeholder="Order number" aria-label="Order number">
+      <button class="ghost" type="submit">Track order</button>
+    </form>
+    <div class="recent" id="recent"></div>
+  </section>
+
+  <section id="orderView" hidden>
+    <button class="ghost" id="backBtn" type="button">New swap</button>
+    <h1 style="margin-top:16px" id="orderTitle">Order</h1>
+    <p class="lede" id="orderLede"></p>
+    <div class="card">
+      <div class="deposit" id="depositBox" hidden>
+        <div class="muted" style="font-size:13px">Send exactly</div>
+        <div class="amt" id="depAmt"></div>
+        <div class="muted" style="font-size:13px;margin-top:8px">to this address</div>
+        <div class="addr mono" id="depAddr"></div>
+        <div class="row" style="justify-content:space-between">
+          <button class="ghost copy" type="button" data-copy="depAddr">Copy address</button>
+          <span class="muted" style="font-size:13px" id="depExpires"></span>
+        </div>
+        <div id="depTagRow" hidden style="margin-top:10px">
+          <div class="muted" style="font-size:13px">Memo / tag (required)</div>
+          <div class="addr mono" id="depTag"></div>
+          <button class="ghost copy" type="button" data-copy="depTag">Copy memo</button>
+        </div>
+      </div>
+
+      <div class="rail" id="orderRail">
+        <div class="stop" id="s1"><div class="big">Deposit with Houdini</div><div class="sub" id="s1sub"></div></div>
+        <div class="stop" id="s2"><div class="big">ICP to the NAKSwap router</div><div class="sub" id="s2sub"></div></div>
+        <div class="stop" id="s3"><div class="big">NAK to your principal</div><div class="sub" id="s3sub"></div></div>
+      </div>
+      <dl class="facts" id="orderFacts"></dl>
+      <div class="err" id="orderErr" role="alert"></div>
+    </div>
+  </section>
+</main>
+<footer>Order data comes from Houdini and the NAKSwap router canister. Keep your order number for support.</footer>
+
+<dialog id="tokenDlg" aria-label="Choose a token">
+  <div class="dlg-head"><input id="tokenSearch" placeholder="Search name or symbol" autocomplete="off"></div>
+  <div class="tlist" id="tokenList"></div>
+</dialog>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const api = async (path, body) => {
+    const res = await fetch(path, {
+      method: body ? 'POST' : 'GET',
+      headers: { 'Content-Type': 'application/json', 'x-user-timezone': tz },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  };
+  const store = {
+    get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  };
+  const fmt = (n, max = 4) => Number(n).toLocaleString(undefined, { maximumFractionDigits: max });
+  const e8 = (s) => Number(BigInt(s || 0)) / 1e8;
+  const pct = (bps) => `${(Number(bps) / 100).toFixed(2)}%`;
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const looksLikePrincipal = (t) => /^[a-z2-7]{5}(-[a-z2-7]{1,5}){1,10}$/.test(t) && t !== '2vxsx-fae';
+
+  let health = null, token = null, routes = [], chosen = null, quotedAt = 0, quoteSeq = 0, pollTimer = null;
+
+  function iconHtml(t) {
+    if (t && t.icon) return `<img src="${esc(t.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+    return esc((t?.symbol || '?').slice(0, 3));
+  }
+
+  // ---------- health ----------
+  async function loadHealth() {
+    try {
+      health = await api('/api/health');
+      const ok = health.houdiniReady && health.routerReady;
+      $('livePill').classList.toggle('off', !ok);
+      $('liveText').textContent = ok ? 'Live' : 'Setting up';
+      const msgs = [];
+      if (!health.houdiniReady) msgs.push('The Houdini API key is not set on the relay yet, so tokens and quotes are unavailable.');
+      if (!health.routerReady) msgs.push('The NAKSwap router canister is not deployed yet: you can get quotes, but swaps are disabled.');
+      $('setupNotice').hidden = !msgs.length;
+      $('setupNotice').textContent = msgs.join(' ');
+    } catch {
+      $('liveText').textContent = 'Offline';
+    }
+  }
+
+  // ---------- token picker ----------
+  let searchTimer = null;
+  async function loadTokens(term) {
+    const list = $('tokenList');
+    list.innerHTML = '<div class="muted" style="padding:12px">Loading…</div>';
+    try {
+      const { tokens } = await api(`/api/tokens?term=${encodeURIComponent(term || '')}`);
+      if (!tokens.length) { list.innerHTML = '<div class="muted" style="padding:12px">No tokens match. Try a symbol like USDT or SOL.</div>'; return; }
+      list.innerHTML = tokens.map((t, i) => `
+        <button class="titem" type="button" data-i="${i}">
+          <span class="ticon">${iconHtml(t)}</span>
+          <span><b>${esc(t.symbol)}</b> <span class="chain">${esc(t.chainName)}</span><br><span class="nm">${esc(t.name)}</span></span>
+        </button>`).join('');
+      list.querySelectorAll('.titem').forEach((b) => b.addEventListener('click', () => {
+        pickToken(tokens[Number(b.dataset.i)]);
+        $('tokenDlg').close();
+      }));
+    } catch (e) {
+      list.innerHTML = `<div class="err" style="padding:12px">${esc(e.message)}</div>`;
+    }
+  }
+  function pickToken(t) {
+    token = t;
+    $('tokenIcon').innerHTML = iconHtml(t);
+    $('tokenSym').textContent = t.symbol;
+    $('tokenChain').textContent = t.chainName;
+    store.set('nak.token', t);
+    scheduleQuote(0);
+  }
+  $('tokenBtn').addEventListener('click', () => { $('tokenDlg').showModal(); $('tokenSearch').value = ''; $('tokenSearch').focus(); loadTokens(''); });
+  $('tokenSearch').addEventListener('input', (ev) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadTokens(ev.target.value.trim()), 300); });
+
+  // ---------- quotes ----------
+  let quoteTimer = null;
+  function scheduleQuote(delay = 700) { clearTimeout(quoteTimer); quoteTimer = setTimeout(getQuote, delay); }
+  $('amount').addEventListener('input', () => scheduleQuote());
+  $('refund').addEventListener('change', () => scheduleQuote(0));
+  $('recipient').addEventListener('input', () => { store.set('nak.recipient', $('recipient').value.trim()); updateSwapBtn(); });
+
+  async function getQuote() {
+    const amount = $('amount').value.trim().replace(',', '.');
+    $('quoteErr').textContent = '';
+    if (!token || !(Number(amount) > 0)) { $('quoteBox').hidden = true; routes = []; chosen = null; updateSwapBtn(); return; }
+    const seq = ++quoteSeq;
+    $('swapBtn').textContent = 'Getting quote…';
+    $('swapBtn').disabled = true;
+    try {
+      const q = await api('/api/quote', { fromId: token.id, amount, refundAddress: $('refund').value.trim() || undefined });
+      if (seq !== quoteSeq) return;
+      routes = q.routes; quotedAt = q.quotedAt;
+      const prevType = chosen?.type;
+      chosen = routes.find((r) => !r.blocked && r.type === prevType) || routes.find((r) => !r.blocked) || null;
+      renderQuote(amount);
+      if (!routes.length) $('quoteErr').textContent = `Houdini has no route from ${token.symbol} to ICP for this amount. Try a larger amount or another token.`;
+    } catch (e) {
+      if (seq !== quoteSeq) return;
+      routes = []; chosen = null; $('quoteBox').hidden = true;
+      $('quoteErr').textContent = e.message;
+    }
+    updateSwapBtn();
+  }
+
+  function renderQuote(amount) {
+    $('quoteBox').hidden = !routes.length;
+    $('routes').innerHTML = routes.map((r, i) => `
+      <button class="route" type="button" data-i="${i}" aria-pressed="${r === chosen}" ${r.blocked ? 'disabled' : ''}>
+        <span class="kind">${r.type === 'private' ? 'Private' : 'Standard'}</span>
+        <span>${esc(r.provider)}<br><span class="muted" style="font-size:12px">about ${esc(r.etaMinutes)} min</span></span>
+        <b>${fmt(e8(r.nakOut), 0)} NAK</b>
+        ${r.blocked ? `<span class="why">Unavailable: ${esc(r.blocked)}</span>` : ''}
+      </button>`).join('');
+    $('routes').querySelectorAll('.route').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; renderQuote(amount); updateSwapBtn(); }));
+    const r = chosen || routes[0];
+    if (!r) return;
+    $('qSend').textContent = `${fmt(amount, 8)} ${token.symbol}`;
+    $('qSendSub').textContent = `You send on ${token.chainName}`;
+    $('qIcp').textContent = `≈ ${fmt(e8(r.icpOut), 4)} ICP`;
+    $('qIcpSub').textContent = `Houdini ${r.type === 'private' ? 'private' : 'standard'} route via ${r.provider}, about ${r.etaMinutes} min`;
+    $('qNak').textContent = `≈ ${fmt(e8(r.nakOut), 0)} NAK`;
+    $('qNakSub').textContent = `NAKSwap router on ICPSwap, price impact ${pct(r.impactBps)}`;
+    $('facts').innerHTML = `
+      <dt>Minimum NAK after slippage</dt><dd>${fmt(e8(r.minNakOut), 0)}</dd>
+      <dt>Router fees</dt><dd>0.0003 ICP + 0.02 NAK</dd>
+      <dt>If the ICP → NAK leg can't run</dt><dd>ICP is refunded to your principal</dd>`;
+  }
+
+  function updateSwapBtn() {
+    const btn = $('swapBtn');
+    const rec = $('recipient').value.trim();
+    let label = 'Swap', ok = true;
+    if (!token) { label = 'Choose a token'; ok = false; }
+    else if (!(Number($('amount').value) > 0)) { label = 'Enter an amount'; ok = false; }
+    else if (!chosen) { label = routes.length ? 'No available route' : 'Swap'; ok = false; }
+    else if (!looksLikePrincipal(rec)) { label = 'Enter your ICP principal'; ok = false; }
+    else if (chosen.requiresRefundAddress && !$('refund').value.trim()) { label = 'This route needs a refund address'; ok = false; }
+    else if (health && !health.routerReady) { label = 'Swaps open once the router is deployed'; ok = false; }
+    btn.textContent = label; btn.disabled = !ok;
+  }
+
+  $('swapBtn').addEventListener('click', async () => {
+    const btn = $('swapBtn');
+    btn.disabled = true; btn.textContent = 'Creating order…';
+    $('quoteErr').textContent = '';
+    try {
+      if (Date.now() - quotedAt > 45_000) {
+        await getQuote();
+        if (!chosen) throw new Error('The quote expired and no route is available now. Try again.');
+      }
+      const r = await api('/api/orders', {
+        quoteId: chosen.quoteId,
+        recipient: $('recipient').value.trim(),
+        refundAddress: $('refund').value.trim() || undefined,
+      });
+      store.set(`nak.order.${r.orderId}`, r);
+      const recent = store.get('nak.recent', []).filter((x) => x !== String(r.orderId));
+      store.set('nak.recent', [String(r.orderId), ...recent].slice(0, 8));
+      location.hash = `order=${r.orderId}`;
+    } catch (e) {
+      $('quoteErr').textContent = e.message;
+      updateSwapBtn();
+    }
+  });
+
+  // ---------- order view ----------
+  const ROUTER = {
+    awaitingDeposit: [0, 'Waiting for ICP from Houdini'],
+    swapping: [1, 'Swapping ICP for NAK on ICPSwap'],
+    payoutPending: [1, 'Swap done, sending NAK'],
+    refundPending: [1, 'Returning ICP to your principal'],
+    completed: [2, 'Done'],
+    refunded: [-1, 'Refunded'],
+    expired: [-1, 'Expired'],
+    needsReview: [-1, 'Held for review'],
+  };
+  const REASONS = {
+    tooSmall: 'the ICP received was below the router minimum',
+    tooLarge: 'the ICP received was above the router maximum',
+    priceImpact: 'the price impact was too high',
+    swapFailed: 'the ICPSwap swap did not go through',
+    admin: 'an admin issued a refund',
+  };
+
+  function setStop(id, state, text) {
+    const el = $(id);
+    el.classList.remove('done', 'active', 'fail');
+    if (state) el.classList.add(state);
+    $(`${id}sub`).textContent = text;
+  }
+
+  async function showOrder(id) {
+    $('swapView').hidden = true; $('orderView').hidden = false;
+    $('orderTitle').textContent = `Order ${id}`;
+    const saved = store.get(`nak.order.${id}`, null);
+    if (saved) renderDeposit(saved.send, saved.nakRecipient);
+    clearInterval(pollTimer);
+    await pollOrder(id);
+    pollTimer = setInterval(() => pollOrder(id), 8000);
+  }
+
+  function renderDeposit(send, recipient) {
+    if (!send || !send.to) { $('depositBox').hidden = true; return; }
+    $('depositBox').hidden = false;
+    $('depAmt').textContent = `${send.amount} ${send.symbol}`;
+    $('depAddr').textContent = send.to;
+    $('depTagRow').hidden = !send.tag;
+    $('depTag').textContent = send.tag || '';
+    const exp = send.expires ? new Date(send.expires) : null;
+    $('depExpires').textContent = exp ? `Send before ${exp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
+    if (recipient) $('orderLede').textContent = `NAK will be sent to ${recipient}.`;
+  }
+
+  async function pollOrder(id) {
+    try {
+      const o = await api(`/api/orders/${id}`);
+      $('orderErr').textContent = '';
+      $('orderLede').textContent = `NAK will be sent to ${o.recipient}.`;
+      const h = o.houdini;
+      if (h?.send) renderDeposit(h.send, o.recipient);
+      // Leg 1: Houdini
+      const hs = h?.status;
+      if (!h) setStop('s1', 'active', 'Linking the Houdini order…');
+      else if (h.error) setStop('s1', 'active', `Houdini status unavailable: ${h.error}`);
+      else if (hs === 4) { setStop('s1', 'done', `Houdini finished: ${fmt(h.outAmount, 4)} ICP sent to the router`); $('depositBox').hidden = true; }
+      else if ([5, 6, 7, 8].includes(hs)) setStop('s1', 'fail', `Houdini: ${h.statusLabel}${h.actionRequired ? '. Contact Houdini support with the order id below.' : ''}`);
+      else setStop('s1', 'active', `Houdini: ${h.statusLabel || 'waiting for your deposit'}`);
+      // Leg 2 + 3: router
+      const [step, label] = ROUTER[o.stage] || [0, o.stage];
+      const d = o.detail || {};
+      if (o.stage === 'completed') {
+        setStop('s2', 'done', `Swapped ${fmt(e8(d.icpIn), 4)} ICP on ICPSwap`);
+        setStop('s3', 'done', `${fmt(e8(d.nakOut), 2)} NAK delivered (NAK ledger block ${d.block})`);
+        $('orderRail').className = 'rail lit-2';
+        clearInterval(pollTimer);
+      } else if (o.stage === 'refunded') {
+        const reason = Object.keys(d.reason || {})[0];
+        setStop('s2', 'fail', `Refunded ${fmt(e8(d.icpAmount), 4)} ICP to ${o.refundTo} because ${REASONS[reason] || reason} (ICP ledger block ${d.block})`);
+        setStop('s3', null, 'Not sent');
+        clearInterval(pollTimer);
+      } else if (o.stage === 'expired') {
+        setStop('s2', 'fail', 'No ICP arrived before the order expired. If you already sent funds, contact support with this order number.');
+        setStop('s3', null, '');
+      } else if (o.stage === 'needsReview') {
+        setStop('s2', 'fail', `Held for manual review: ${typeof d === 'string' ? d : ''}. Your funds are safe; contact support with this order number.`);
+        setStop('s3', null, '');
+      } else {
+        setStop('s2', step >= 1 ? 'active' : (hs === 4 ? 'active' : null), step >= 1 ? label : (hs === 4 ? 'ICP received, starting the swap' : label));
+        setStop('s3', o.stage === 'payoutPending' ? 'active' : null, o.stage === 'payoutPending' ? `Sending ${fmt(e8(d.nakAmount), 2)} NAK` : '');
+        $('orderRail').className = hs === 4 ? 'rail lit-1' : 'rail';
+      }
+      $('orderFacts').innerHTML = `
+        <dt>Houdini order</dt><dd class="mono">${esc(h?.houdiniId || '—')}</dd>
+        <dt>Router deposit account</dt><dd class="mono" style="word-break:break-all;max-width:220px">${esc(o.icpDepositAccount)}</dd>`;
+    } catch (e) {
+      $('orderErr').textContent = e.message;
+    }
+  }
+
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-copy]');
+    if (!b) return;
+    navigator.clipboard?.writeText($(b.dataset.copy).textContent).then(() => {
+      const t = b.textContent; b.textContent = 'Copied'; setTimeout(() => (b.textContent = t), 1200);
+    });
+  });
+  $('backBtn').addEventListener('click', () => { location.hash = ''; });
+  $('trackForm').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const id = $('trackId').value.trim();
+    if (/^\d+$/.test(id)) location.hash = `order=${id}`;
+  });
+
+  function renderRecent() {
+    const ids = store.get('nak.recent', []);
+    $('recent').innerHTML = ids.length ? `<span class="muted">Your recent orders:</span> ${ids.map((i) => `<a href="#order=${i}">#${esc(i)}</a>`).join(' ')}` : '';
+  }
+
+  function route() {
+    const m = location.hash.match(/order=(\d+)/);
+    if (m) showOrder(m[1]);
+    else {
+      clearInterval(pollTimer);
+      $('orderView').hidden = true; $('swapView').hidden = false;
+      renderRecent();
+    }
+  }
+  window.addEventListener('hashchange', route);
+
+  $('recipient').value = store.get('nak.recipient', '');
+  const savedToken = store.get('nak.token', null);
+  if (savedToken) pickToken(savedToken);
+  loadHealth().then(updateSwapBtn);
+  route();
+})();
+</script>
+</body>
+</html>

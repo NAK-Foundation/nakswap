@@ -1,0 +1,107 @@
+type Status = 
+ variant {
+   awaitingDeposit;
+   completed: record {
+                block: nat;
+                icpIn: nat;
+                nakOut: nat;
+              };
+   expired;
+   needsReview: text;
+   payoutPending: record {
+                    createdAtTime: nat64;
+                    icpIn: nat;
+                    nakAmount: nat;
+                  };
+   refundPending:
+    record {
+      createdAtTime: nat64;
+      fromDeposit: bool;
+      icpAmount: nat;
+      reason: RefundReason;
+    };
+   refunded: record {
+               block: nat;
+               icpAmount: nat;
+               reason: RefundReason;
+             };
+   swapping: record {
+               icpIn: nat;
+               startedAt: int;
+             };
+ };
+type Router = 
+ service {
+   activeOrderIds: () -> (vec nat) query;
+   attachHoudini: (id: nat, houdiniId: text) -> (bool);
+   createOrder: (args: CreateOrderArgs) -> (Result);
+   forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
+   getConfig: () -> (Config) query;
+   getOrder: (id: nat) -> (opt OrderView) query;
+   listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
+   poke: (id: nat) -> (PokeResult);
+   reopen: (id: nat) -> (opt Status);
+   setConfig: (cfg: Config) -> (bool);
+   setPaused: (paused: bool) -> (bool);
+ };
+type Result = 
+ variant {
+   err: CreateOrderError;
+   ok: OrderView;
+ };
+type RefundReason = 
+ variant {
+   admin;
+   priceImpact: record {bps: nat;};
+   swapFailed: text;
+   tooLarge;
+   tooSmall;
+ };
+type PokeResult = 
+ variant {
+   busy;
+   notFound;
+   processed: Status;
+   tooSoon;
+ };
+type OrderView = 
+ record {
+   createdAt: int;
+   depositAccountId: text;
+   houdiniId: opt text;
+   id: nat;
+   minNakOut: nat;
+   recipient: principal;
+   refundTo: principal;
+   status: Status;
+ };
+type CreateOrderError = 
+ variant {
+   anonymousRecipient;
+   notAuthorized;
+   paused;
+ };
+type CreateOrderArgs = 
+ record {
+   minNakOut: opt nat;
+   recipient: principal;
+   refundTo: opt principal;
+ };
+type Config = 
+ record {
+   admin: principal;
+   icpFee: nat;
+   icpIsToken0: bool;
+   icpLedger: principal;
+   maxImpactBps: nat;
+   maxOrderIcp: nat;
+   minOrderIcp: nat;
+   nakFee: nat;
+   nakLedger: principal;
+   operators: vec principal;
+   orderTtlSeconds: nat;
+   paused: bool;
+   pool: principal;
+   slippageBps: nat;
+ };
+service : (init: Config, tickSeconds: nat) -> Router

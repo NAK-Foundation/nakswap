@@ -1,0 +1,116 @@
+// Local stand-in for an ICPSwap SwapPool, ICP -> NAK direction only. Constant-product
+// pricing with a 0.3% fee. Behaviour copied from the ICPSwap docs: depositFromAndSwap
+// pulls the input with icrc2_transfer_from, and if amountOutMinimum is not met the input
+// is sent back to the caller and an error is returned.
+import Int "mo:core/Int";
+import Nat "mo:core/Nat";
+import Principal "mo:core/Principal";
+import Ext "../common/Ext";
+
+actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToken0 : Bool) = this {
+
+  var icpReserve = 0;
+  var nakReserve = 0;
+  transient let feeKeep = 997_000; // 0.3% pool fee, per 1e6 like ICPSwap
+  // Test hook: make the next swap fail inside the pool after the deposit.
+  var breakNextSwap = false;
+
+  type TransferFromArg = {
+    spender_subaccount : ?Blob;
+    from : Ext.Account;
+    to : Ext.Account;
+    amount : Nat;
+    fee : ?Nat;
+    memo : ?Blob;
+    created_at_time : ?Nat64;
+  };
+  type IcpLedger = actor {
+    icrc2_transfer_from : shared TransferFromArg -> async { #Ok : Nat; #Err : Any };
+    icrc1_transfer : shared Ext.TransferArg -> async { #Ok : Nat; #Err : Ext.TransferError };
+  };
+
+  func out(amountIn : Nat) : Nat {
+    let inAfterFee = amountIn * feeKeep / 1_000_000;
+    if (icpReserve + inAfterFee == 0) { return 0 };
+    inAfterFee * nakReserve / (icpReserve + inAfterFee);
+  };
+
+  // Reserves must be backed by real balances: mint NAK to this pool before seeding.
+  public func seed(icp : Nat, nak : Nat) : async () {
+    icpReserve := icp;
+    nakReserve := nak;
+  };
+
+  public func setBreakNextSwap(b : Bool) : async () { breakNextSwap := b };
+
+  public query func reserves() : async { icp : Nat; nak : Nat } { { icp = icpReserve; nak = nakReserve } };
+
+  public query func quote(args : Ext.SwapArgs) : async { #ok : Nat; #err : Ext.PoolError } {
+    if (args.zeroForOne != icpIsToken0) { return #err(#UnsupportedToken("mock only swaps ICP -> NAK")) };
+    switch (args.amountIn.toNat()) {
+      case (?a) { #ok(out(a)) };
+      case null { #err(#InternalError("bad amountIn")) };
+    };
+  };
+
+  public shared ({ caller }) func depositFromAndSwap(args : Ext.DepositAndSwapArgs) : async { #ok : Nat; #err : Ext.PoolError } {
+    if (args.zeroForOne != icpIsToken0) { return #err(#UnsupportedToken("mock only swaps ICP -> NAK")) };
+    let amountIn = args.amountIn.toNat() ?? (return #err(#InternalError("bad amountIn")));
+    let minOut = args.amountOutMinimum.toNat() ?? (return #err(#InternalError("bad amountOutMinimum")));
+    let self = Principal.fromActor(this);
+    let icp : IcpLedger = actor (icpLedger.toText());
+    let nak : Ext.Ledger = actor (nakLedger.toText());
+
+    // Deposit.
+    switch (
+      await icp.icrc2_transfer_from({
+        spender_subaccount = null;
+        from = { owner = caller; subaccount = null };
+        to = { owner = self; subaccount = null };
+        amount = amountIn;
+        fee = ?args.tokenInFee;
+        memo = null;
+        created_at_time = null;
+      })
+    ) {
+      case (#Ok _) {};
+      case (#Err _) { return #err(#InsufficientFunds) };
+    };
+
+    if (breakNextSwap) {
+      // Simulates "deposit succeeded, withdraw failed": funds stay in the pool.
+      breakNextSwap := false;
+      return #err(#InternalError("withdraw failed"));
+    };
+
+    let amountOut = out(amountIn);
+    if (amountOut < minOut) {
+      ignore await icp.icrc1_transfer({
+        from_subaccount = null;
+        to = { owner = caller; subaccount = null };
+        amount = (amountIn - args.tokenInFee : Int).toNat();
+        fee = ?args.tokenInFee;
+        memo = null;
+        created_at_time = null;
+      });
+      return #err(#InternalError("slippage over range: " # amountOut.toText() # " < " # minOut.toText()));
+    };
+
+    icpReserve += amountIn;
+    nakReserve := (nakReserve - amountOut : Int).toNat();
+    // Withdraw: the caller receives amountOut minus the NAK transfer fee.
+    switch (
+      await nak.icrc1_transfer({
+        from_subaccount = null;
+        to = { owner = caller; subaccount = null };
+        amount = (amountOut - args.tokenOutFee : Int).toNat();
+        fee = ?args.tokenOutFee;
+        memo = null;
+        created_at_time = null;
+      })
+    ) {
+      case (#Ok _) { #ok(amountOut) };
+      case (#Err _) { #err(#InternalError("withdraw failed")) };
+    };
+  };
+};

@@ -1,0 +1,12 @@
+{
+  "name": "nakswap-admin-dashboard",
+  "private": true,
+  "type": "module",
+  "description": "Source of relay/public/admin/app.js (the admin dashboard). Build: npm install && npm run build",
+  "scripts": { "build": "node build.mjs" },
+  "devDependencies": {
+    "@icp-sdk/auth": "10.0.1",
+    "@icp-sdk/core": "6.1.0",
+    "esbuild": "0.25.10"
+  }
+}

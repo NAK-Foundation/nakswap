@@ -30,6 +30,11 @@ type HelperJob =
  };
 type Helper = 
  service {
+   health: () -> (record {
+                    busy: bool;
+                    cycles: nat;
+                    lastClean: bool;
+                  }) query;
    poolUnused: () -> (variant {
                         err: text;
                         ok: record {

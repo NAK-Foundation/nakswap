@@ -247,6 +247,35 @@ payout to a principal is visible to anyone. What NAKSwap does to keep the rest u
 - **Tip for users**: receive into a fresh principal if you don't want the NAK tied to your
   main wallet.
 
+## Admin dashboard and monitoring
+
+**Dashboard:** https://relay-production-e42e.up.railway.app/admin. Sign in with Internet
+Identity (id.ai popup). Internet Identity gives each site its own principal, so the first time,
+copy the principal shown at the top and add it as a guardian (controller key):
+
+```bash
+node scripts/router-admin.mjs add-guardian <principal>    # remove-guardian / guardians
+```
+
+A guardian can see everything (health, cycles of router and helpers, open orders vs cap, orders
+needing review, helper state, ICPSwap pending transactions, balances, fees, relay/Houdini
+status), freeze and unfreeze swaps, run recovery, and request a security audit. A guardian
+can't move funds or change settings (those stay on the controller key). The page flags
+unusual behaviour: low cycles, frozen swaps, orders in review, quarantined helpers, helpers
+holding funds while idle, ICPSwap pending/failed transactions, stuck fees, open orders near the
+cap, unusual order volume, funds sent to helpers by strangers, relay/Houdini down.
+
+Freeze = `setPaused(true)`: no new orders and no new swaps; payouts and refunds already in
+progress still complete. Source of the page script: `relay/admin-src/` (`npm install && npm
+run build` writes `relay/public/admin/app.js`).
+
+**Audit requests and monitoring:** "Request security audit" records a request on the router
+(`auditRequests`, public: ids, times, notes). A scheduled Claude task checks every 2 hours:
+it runs `node scripts/monitor.mjs` (key-free health check using only public queries) and, for
+each request not yet handled, runs a full security audit. Reports go to the `audits` branch
+(`audits/LOG.md` lists handled requests); fixes, if any, go to an `audit-fix/<id>` branch with a
+pull request. Nothing is deployed automatically: deploying needs the controller key.
+
 ## Abuse and cycle-drain protection
 
 Router (`src/router/main.mo`, `lib/Guard.mo`):

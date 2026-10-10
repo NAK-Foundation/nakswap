@@ -111,6 +111,7 @@ module {
     swap : shared HelperJob -> async HelperResult;
     returnAll : shared (Account, Nat, Nat) -> async { #ok : { nak : Nat; icp : Nat }; #err : Text };
     routerId : shared query () -> async Principal;
+    health : shared query () -> async { cycles : Nat; busy : Bool; lastClean : Bool };
     settled : shared (Nat, Nat) -> async Bool;
     poolUnused : shared () -> async { #ok : { icp : Nat; nak : Nat }; #err : Text };
     withdrawFromPool : shared (Bool, Nat, Nat) -> async { #ok : Nat; #err : Text };

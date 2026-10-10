@@ -151,6 +151,31 @@ module {
     var nextHelper : Nat;
   };
 
+  // Admin dashboard: guardians (Internet Identity principals of the dashboard) can watch,
+  // freeze/unfreeze and request audits; nothing that moves funds or changes settings.
+  public type AuditRequest = { id : Nat; at : Int; by : Principal; note : Text };
+  public type OpsState = {
+    guardians : Set.Set<Principal>;
+    audits : Map.Map<Nat, AuditRequest>;
+    var nextAudit : Nat;
+  };
+  public type Role = { #controller; #admin; #guardian; #operator; #none };
+
+  public type OrderLine = { id : Nat; status : Text; createdAt : Int; icpIn : Nat; nakOut : Nat; detail : Text };
+
+  public type Overview = {
+    health : Health;
+    maxOpenOrders : Nat;
+    counts : [(Text, Nat)];
+    ordersLastHour : Nat;
+    review : [OrderLine];
+    recent : [OrderLine];
+    helpers : [HelperInfo];
+    fees : FeeStatus;
+    ordersWithHelperFunds : Nat;
+    straySubaccount : Blob;
+  };
+
   public type HelperInfo = { helper : Principal; busy : Bool; quarantined : Bool; holdsOrder : ?Nat };
 
   public type FeeStatus = {

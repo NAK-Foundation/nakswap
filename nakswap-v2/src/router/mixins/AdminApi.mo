@@ -2,6 +2,7 @@ import Array "mo:core/Array";
 import Cycles "mo:core/Cycles";
 import Int "mo:core/Int";
 import Iter "mo:core/Iter";
+import List "mo:core/List";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
@@ -22,12 +23,186 @@ mixin (
   fees : Types.FeeState,
   privacy : Types.PrivacyState,
   rt : Types.Runtime,
+  ops : Types.OpsState,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
   self : Principal,
 ) {
 
   public query func getConfig() : async Types.Config { state.config };
+
+  // ---- admin dashboard (guardians) ----
+
+  func isGuardian(caller : Principal) : Bool {
+    Orders.isAdmin(state.config, caller) or ops.guardians.contains(caller);
+  };
+  func canWatch(caller : Principal) : Bool {
+    Orders.isOperator(state.config, caller) or ops.guardians.contains(caller);
+  };
+
+  public query ({ caller }) func myRole() : async Types.Role {
+    if (caller.isController()) { #controller } else if (caller == state.config.admin) { #admin } else if (ops.guardians.contains(caller)) {
+      #guardian;
+    } else if (Orders.isOperator(state.config, caller)) { #operator } else { #none };
+  };
+
+  // Controllers only. A guardian can watch, freeze/unfreeze, run recovery and request
+  // audits, but can't move funds or change settings.
+  public shared ({ caller }) func addGuardian(p : Principal) : async Bool {
+    if (not caller.isController()) { return false };
+    if (p.isAnonymous() or p == self or ops.guardians.size() >= 5) { return false };
+    ops.guardians.add(p);
+    true;
+  };
+
+  public shared ({ caller }) func removeGuardian(p : Principal) : async Bool {
+    if (not caller.isController()) { return false };
+    ops.guardians.remove(p);
+    true;
+  };
+
+  public query ({ caller }) func guardians() : async [Principal] {
+    if (not isGuardian(caller)) { return [] };
+    ops.guardians.values().toArray();
+  };
+
+  // A guardian asks for a security audit. Public list (ids, times, notes) so the scheduled
+  // audit can pick requests up without any key; at most one per 10 minutes, last 50 kept.
+  public shared ({ caller }) func requestAudit(note : Text) : async ?Nat {
+    if (not isGuardian(caller)) { return null };
+    if (note.size() > 280) { return null };
+    let now = Time.now();
+    if (ops.nextAudit > 0) {
+      switch (ops.audits.get((ops.nextAudit - 1 : Int).toNat())) {
+        case (?last) { if (now - last.at < 600_000_000_000) { return null } };
+        case null {};
+      };
+    };
+    let id = ops.nextAudit;
+    ops.audits.add(id, { id; at = now; by = caller; note });
+    ops.nextAudit += 1;
+    if (id >= 50) { ops.audits.remove((id - 50 : Int).toNat()) };
+    ?id;
+  };
+
+  // Counts only, no identities or amounts: lets an outside monitor (the scheduled audit) see
+  // trouble without holding any key.
+  public query func publicStatus() : async {
+    paused : Bool;
+    acceptingOrders : Bool;
+    cycles : Nat;
+    openOrders : Nat;
+    maxOpenOrders : Nat;
+    needsReview : Nat;
+    helpers : Nat;
+    quarantinedHelpers : Nat;
+    ordersWithHelperFunds : Nat;
+    stuckFees : Nat;
+    ordersLastHour : Nat;
+  } {
+    var review = 0;
+    var lastHour = 0;
+    let hourAgo = Time.now() - 3_600_000_000_000;
+    for (o in orders.values()) {
+      switch (o.status) { case (#needsReview _) { review += 1 }; case _ {} };
+      if (o.createdAt >= hourAgo) { lastHour += 1 };
+    };
+    let cycles = Cycles.balance();
+    {
+      paused = state.config.paused;
+      acceptingOrders = not state.config.paused and cycles >= Guard.lowCycles;
+      cycles;
+      openOrders = active.size();
+      maxOpenOrders = Guard.maxOpenOrders;
+      needsReview = review;
+      helpers = rt.exec.helpers.size();
+      quarantinedHelpers = rt.quarantined.size();
+      ordersWithHelperFunds = rt.jobFees.size();
+      stuckFees = fees.stuck;
+      ordersLastHour = lastHour;
+    };
+  };
+
+  public query func auditRequests() : async [{ id : Nat; at : Int; note : Text }] {
+    ops.audits.values().map(func(a : Types.AuditRequest) : { id : Nat; at : Int; note : Text } = { id = a.id; at = a.at; note = a.note }).toArray();
+  };
+
+  func statusTag(s : Types.Status) : Text {
+    switch s {
+      case (#awaitingDeposit) { "awaitingDeposit" };
+      case (#swapping _) { "swapping" };
+      case (#payoutPending _) { "payoutPending" };
+      case (#refundPending _) { "refundPending" };
+      case (#completed _) { "completed" };
+      case (#refunded _) { "refunded" };
+      case (#expired) { "expired" };
+      case (#needsReview _) { "needsReview" };
+    };
+  };
+
+  func line(o : Types.Order) : Types.OrderLine {
+    let (icpIn, nakOut, detail) = switch (o.status) {
+      case (#completed c) { (c.icpIn, c.nakOut, "") };
+      case (#payoutPending p) { (p.icpIn, p.nakAmount, "") };
+      case (#swapping s) { (s.icpIn, 0, "") };
+      case (#refunded r) { (r.icpAmount, 0, debug_show r.reason) };
+      case (#refundPending r) { (r.icpAmount, 0, debug_show r.reason) };
+      case (#needsReview m) { (0, 0, m) };
+      case _ { (0, 0, "") };
+    };
+    { id = o.id; status = statusTag(o.status); createdAt = o.createdAt; icpIn; nakOut; detail };
+  };
+
+  // Everything the dashboard shows, in one call.
+  public query ({ caller }) func adminOverview() : async ?Types.Overview {
+    if (not canWatch(caller)) { return null };
+    let tags = ["awaitingDeposit", "swapping", "payoutPending", "refundPending", "completed", "refunded", "expired", "needsReview"];
+    let counts = Map.empty<Text, Nat>();
+    let review = List.empty<Types.OrderLine>();
+    var lastHour = 0;
+    let hourAgo = Time.now() - 3_600_000_000_000;
+    for (o in orders.values()) {
+      let t = statusTag(o.status);
+      counts.add(t, (counts.get(t) ?? 0) + 1);
+      if (t == "needsReview" and review.size() < 50) { review.add(line(o)) };
+      if (o.createdAt >= hourAgo) { lastHour += 1 };
+    };
+    let recent = List.empty<Types.OrderLine>();
+    for ((_, o) in orders.reverseEntries()) {
+      if (recent.size() >= 30) { break };
+      recent.add(line(o));
+    };
+    let cycles = Cycles.balance();
+    ?{
+      health = {
+        cycles;
+        lowCyclesThreshold = Guard.lowCycles;
+        acceptingOrders = not state.config.paused and cycles >= Guard.lowCycles;
+        paused = state.config.paused;
+        activeOrders = active.size();
+        nextOrderId = state.nextId;
+        feeBps = fees.bps;
+        helpers = rt.exec.helpers.size();
+      };
+      maxOpenOrders = Guard.maxOpenOrders;
+      counts = tags.map<Text, (Text, Nat)>(func t = (t, counts.get(t) ?? 0));
+      ordersLastHour = lastHour;
+      review = review.toArray();
+      recent = recent.toArray();
+      helpers = rt.exec.helpers.map(func(h : Principal) : Types.HelperInfo = { helper = h; busy = rt.busyHelpers.contains(h); quarantined = rt.quarantined.contains(h); holdsOrder = rt.helperOrders.get(h) });
+      fees = {
+        bps = fees.bps;
+        to = fees.to;
+        accrued = fees.accrued + rt.subFees.values().foldLeft(0, func(acc : Nat, f : Types.SubFee) : Nat = acc + f.amount);
+        paidTotal = fees.paidTotal;
+        stuck = fees.stuck;
+        pending = fees.pending;
+        autoSweepAt = Engine.feeAutoSweepE8s;
+      };
+      ordersWithHelperFunds = rt.jobFees.size();
+      straySubaccount = Account.straySubaccount;
+    };
+  };
 
   // Guard rails against a typo (or a stolen admin session) bricking or redirecting the
   // router. Ledgers and pool are fixed here; changing them takes a code upgrade.
@@ -53,7 +228,7 @@ mixin (
   };
 
   public shared ({ caller }) func setPaused(paused : Bool) : async Bool {
-    if (not Orders.isAdmin(state.config, caller)) { return false };
+    if (not isGuardian(caller)) { return false };
     state.config := { state.config with paused };
     true;
   };
@@ -224,7 +399,7 @@ mixin (
 
   // Run the background recovery of parked helpers now (it also runs on every tick).
   public shared ({ caller }) func runRecovery() : async () {
-    if (not Orders.isAdmin(state.config, caller)) { return };
+    if (not isGuardian(caller)) { return };
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
   };
 
@@ -249,7 +424,7 @@ mixin (
   };
 
   public query ({ caller }) func helpers() : async [Types.HelperInfo] {
-    if (not Orders.isOperator(state.config, caller)) { return [] };
+    if (not canWatch(caller)) { return [] };
     rt.exec.helpers.map(func(h : Principal) : Types.HelperInfo = { helper = h; busy = rt.busyHelpers.contains(h); quarantined = rt.quarantined.contains(h); holdsOrder = rt.helperOrders.get(h) });
   };
 
@@ -350,7 +525,7 @@ mixin (
   };
 
   public query ({ caller }) func listOrders(fromId : Nat, limit : Nat) : async [Types.OrderView] {
-    if (not Orders.isOperator(state.config, caller)) { return [] };
+    if (not canWatch(caller)) { return [] };
     let out = Map.empty<Nat, Types.OrderView>();
     for ((id, o) in orders.entriesFrom(fromId)) {
       if (out.size() >= Nat.min(limit, 100)) { break };
@@ -360,7 +535,7 @@ mixin (
   };
 
   public query ({ caller }) func activeOrderIds() : async [Nat] {
-    if (not Orders.isOperator(state.config, caller)) { return [] };
+    if (not canWatch(caller)) { return [] };
     active.values().toArray();
   };
 

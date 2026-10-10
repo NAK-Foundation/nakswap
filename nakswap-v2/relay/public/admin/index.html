@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>NAKSwap Admin</title>
+<link rel="icon" href="/favicon.png">
+<style>
+  @font-face { font-family: "Inter"; font-weight: 400; font-display: swap; src: url(/fonts/inter-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Inter"; font-weight: 500; font-display: swap; src: url(/fonts/inter-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Inter"; font-weight: 600; font-display: swap; src: url(/fonts/inter-latin-600-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Oswald"; font-weight: 500; font-display: swap; src: url(/fonts/oswald-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: url(/fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2"); }
+  :root {
+    --bg: #08090a; --surface: #0e1011; --surface-hi: #141719;
+    --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.16);
+    --text: #f4f4f5; --text-2: #a1a1aa; --muted: #8a8a93;
+    --accent: #8b5cf6; --good: #10b981; --bad: #ef4444; --warn: #f59e0b;
+    --display: "Oswald", system-ui, sans-serif; --body: "Inter", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace; --r: 4.5px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 14px/1.5 var(--body); -webkit-font-smoothing: antialiased; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  .good { color: var(--good); } .bad { color: var(--bad); }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    background: rgba(8,9,10,.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  header img { width: 26px; height: 26px; }
+  .wordmark { font-family: var(--display); font-weight: 500; letter-spacing: .14em; text-transform: uppercase; font-size: 16px; }
+  .sub { padding-left: 10px; border-left: 1px solid var(--border-strong); font-size: 11px; color: var(--muted); }
+  .spacer { flex: 1; }
+  button { font: 500 13px var(--body); color: var(--text); background: var(--surface-hi); border: 1px solid var(--border-strong);
+    border-radius: var(--r); padding: 8px 14px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--text-2); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); }
+  button.danger { background: #3a0f12; border-color: var(--bad); color: #fecaca; }
+  button.safe { background: #0b2a20; border-color: var(--good); color: #bbf7d0; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 60px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 16px; margin-bottom: 16px; }
+  h2 { font: 500 12px var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--text-2); margin: 0 0 12px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+  @media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .overall { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .overall .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 4px rgba(16,185,129,.15); }
+  .overall.warn .dot { background: var(--warn); box-shadow: 0 0 0 4px rgba(245,158,11,.15); }
+  .overall.crit .dot { background: var(--bad); box-shadow: 0 0 0 4px rgba(239,68,68,.18); }
+  .overall b { font-family: var(--display); font-weight: 500; font-size: 22px; letter-spacing: .04em; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  ul.alerts { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px; }
+  ul.alerts li { padding: 8px 10px; border-radius: var(--r); background: var(--surface-hi); border-left: 3px solid var(--good); }
+  ul.alerts li.warn { border-left-color: var(--warn); } ul.alerts li.crit { border-left-color: var(--bad); } ul.alerts li.info { border-left-color: var(--accent); }
+  .tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-right: 8px; color: var(--text-2); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface-hi); border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; }
+  .tile span { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .tile b { font-family: var(--display); font-weight: 500; font-size: 20px; }
+  .counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; }
+  .count { display: flex; justify-content: space-between; padding: 6px 10px; background: var(--surface-hi); border-radius: var(--r); font-size: 12.5px; }
+  .count.hot { outline: 1px solid var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  td.detail { color: var(--text-2); max-width: 360px; word-break: break-word; }
+  .scroll { overflow-x: auto; }
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
+  dt { color: var(--muted); } dd { margin: 0; word-break: break-word; }
+  textarea { width: 100%; min-height: 64px; background: var(--surface-hi); color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: var(--r); padding: 8px; font: 13px var(--body); resize: vertical; }
+  ul.plain { list-style: none; margin: 10px 0 0; padding: 0; font-size: 12.5px; display: grid; gap: 4px; }
+  .center { max-width: 560px; margin: 60px auto; text-align: center; }
+  .center p { color: var(--text-2); }
+  .meline { font-size: 12px; color: var(--muted); }
+  #err { color: var(--bad); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <img src="/nak-shell.png" alt="">
+  <span class="wordmark">N.A.K.</span><span class="sub">NAKSwap admin</span>
+  <span class="spacer"></span>
+  <span class="meline" id="meBox" hidden><span id="role"></span> · <span class="mono" id="me"></span> <button id="copyMe" type="button">Copy</button></span>
+  <button id="signin" class="primary" type="button">Sign in with Internet Identity</button>
+  <button id="signout" type="button" hidden>Sign out</button>
+</header>
+<main>
+  <div class="center" id="welcome">
+    <p id="authMsg">Sign in with Internet Identity to see the NAKSwap admin dashboard.</p>
+  </div>
+
+  <div class="center" id="unauth" hidden>
+    <h2>Not authorized yet</h2>
+    <p>This Internet Identity isn't a NAKSwap guardian. Copy the principal shown at the top and have it added with <span class="mono">router-admin.mjs add-guardian &lt;principal&gt;</span>.</p>
+  </div>
+
+  <div id="dash" hidden>
+    <section class="card">
+      <div class="overall" id="overall">
+        <span class="dot"></span><b id="overallText">…</b>
+        <span class="muted">Swaps: <span id="stateText">…</span> · <span id="updated"></span></span>
+        <div class="controls">
+          <button id="refresh" type="button">Refresh</button>
+          <button id="recover" type="button" title="Hand funds held by a paused helper back to their order, if ICPSwap has finished">Run recovery</button>
+          <button id="freeze" class="danger" type="button">Freeze NAKSwap</button>
+          <button id="unfreeze" class="safe" type="button" hidden>Unfreeze</button>
+        </div>
+      </div>
+      <ul class="alerts" id="alerts"></ul>
+      <div id="err"></div>
+    </section>
+
+    <section class="card"><div class="tiles" id="tiles"></div></section>
+
+    <div class="grid">
+      <div>
+        <section class="card">
+          <h2>Needs review</h2>
+          <div class="scroll"><table><thead><tr><th>Order</th><th>Status</th><th>Created</th><th>ICP</th><th>NAK</th><th>Detail</th></tr></thead><tbody id="review"></tbody></table></div>
+        </section>
+        <section class="card">
+          <h2>Swap helpers</h2>
+          <div class="scroll"><table><thead><tr><th>#</th><th>Canister</th><th>Cycles</th><th>State</th><th>Holds</th><th>ICPSwap pending</th></tr></thead><tbody id="helpers"></tbody></table></div>
+        </section>
+        <section class="card">
+          <h2>Recent orders</h2>
+          <div class="scroll"><table><thead><tr><th>Order</th><th>Status</th><th>Created</th><th>ICP</th><th>NAK</th><th>Detail</th></tr></thead><tbody id="recent"></tbody></table></div>
+        </section>
+      </div>
+      <div>
+        <section class="card"><h2>Orders by status</h2><div class="counts" id="counts"></div></section>
+        <section class="card"><h2>Accounts</h2><dl id="money"></dl></section>
+        <section class="card">
+          <h2>Security audit</h2>
+          <p class="muted" style="margin-top:0">Ask Claude for a full security audit of the router, helpers and site. It's picked up within 2 hours; the report and any fixes come back to you.</p>
+          <textarea id="auditNote" maxlength="280" placeholder="Anything specific to look at? (optional)"></textarea>
+          <div style="margin-top:8px"><button id="auditBtn" class="primary" type="button">Request security audit</button></div>
+          <div id="auditMsg" class="muted" style="margin-top:8px"></div>
+          <ul class="plain" id="audits"></ul>
+        </section>
+      </div>
+    </div>
+  </div>
+</main>
+<script src="/admin/app.js"></script>
+</body>
+</html>

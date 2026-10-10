@@ -33,7 +33,14 @@ type Status =
 type Router = 
  service {
    activeOrderIds: () -> (vec nat) query;
+   addGuardian: (p: principal) -> (bool);
+   adminOverview: () -> (opt Overview) query;
    attachHoudini: (id: nat, houdiniId: text) -> (bool);
+   auditRequests: () -> (vec record {
+                               at: int;
+                               id: nat;
+                               note: text;
+                             }) query;
    cancelUnfunded: (id: nat) -> (bool);
    clearHelper: (i: nat) -> (bool);
    createOrder: (args: CreateOrderArgs) -> (Result_6);
@@ -42,17 +49,35 @@ type Router =
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
    getConfig: () -> (Config) query;
    getOrder: (id: nat) -> (opt OrderView) query;
+   guardians: () -> (vec principal) query;
    health: () -> (Health) query;
    helperPoolUnused: (i: nat) -> (Result_1);
    helperRecover: (i: nat, id: opt nat) -> (Result_1);
    helperWithdrawFromPool: (i: nat, icpToken: bool, amount: nat) -> (Result);
    helpers: () -> (vec HelperInfo) query;
    listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
+   myRole: () -> (Role) query;
    poke: (id: nat) -> (PokeResult);
    poolUnusedBalance: () -> (Result_1);
+   publicStatus: () ->
+    (record {
+       acceptingOrders: bool;
+       cycles: nat;
+       helpers: nat;
+       maxOpenOrders: nat;
+       needsReview: nat;
+       openOrders: nat;
+       ordersLastHour: nat;
+       ordersWithHelperFunds: nat;
+       paused: bool;
+       quarantinedHelpers: nat;
+       stuckFees: nat;
+     }) query;
    recoverDeposit: (id: nat, to: principal) -> (Result_1);
    recoverStray: (to: principal) -> (Result_1);
+   removeGuardian: (p: principal) -> (bool);
    reopen: (id: nat) -> (opt Status);
+   requestAudit: (note: text) -> (opt nat);
    resolveStuckFees: (delivered: bool) -> (bool);
    runRecovery: () -> ();
    setConfig: (cfg: Config) -> (bool);
@@ -61,6 +86,14 @@ type Router =
    setPaused: (paused: bool) -> (bool);
    sweepFees: () -> (nat);
    withdrawFromPool: (icpToken: bool, amount: nat) -> (Result);
+ };
+type Role = 
+ variant {
+   admin;
+   controller;
+   guardian;
+   none;
+   operator;
  };
 type Result_6 = 
  variant {
@@ -96,6 +129,22 @@ type PokeResult =
    processed: Status;
    tooSoon;
  };
+type Overview = 
+ record {
+   counts: vec record {
+                 text;
+                 nat;
+               };
+   fees: FeeStatus;
+   health: Health;
+   helpers: vec HelperInfo;
+   maxOpenOrders: nat;
+   ordersLastHour: nat;
+   ordersWithHelperFunds: nat;
+   recent: vec OrderLine;
+   review: vec OrderLine;
+   straySubaccount: blob;
+ };
 type OrderView = 
  record {
    createdAt: int;
@@ -107,6 +156,15 @@ type OrderView =
    recipient: principal;
    refundTo: principal;
    status: Status;
+ };
+type OrderLine = 
+ record {
+   createdAt: int;
+   detail: text;
+   icpIn: nat;
+   id: nat;
+   nakOut: nat;
+   status: text;
  };
 type HelperInfo = 
  record {

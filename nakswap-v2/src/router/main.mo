@@ -46,6 +46,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   let quarantined = Set.empty<Principal>();
   let helperOrders = Map.empty<Principal, Nat>();
   let jobFees = Map.empty<Nat, Nat>();
+  // Admin dashboard: guardians and audit requests.
+  let ops : Types.OpsState = { guardians = Set.empty<Principal>(); audits = Map.empty<Nat, Types.AuditRequest>(); var nextAudit = 0 };
 
   transient let self = Principal.fromActor(this);
   transient let rt : Types.Runtime = {
@@ -65,13 +67,13 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   state.busy := false;
 
   include OrdersApi(state, fees, privacy, rt, orders, active, self);
-  include AdminApi(state, fees, privacy, rt, orders, active, self);
+  include AdminApi(state, fees, privacy, rt, ops, orders, active, self);
 
   // Ingress filter, run before a message is accepted, so rejected calls cost the canister
   // nothing. Every update method is for the relay, the admin or a controller; everyone else
   // (and anything oversized) is turned away here. Public queries are unaffected.
   system func inspect({ caller : Principal; arg : Blob }) : Bool {
-    arg.size() <= Guard.maxArgBytes and Orders.isOperator(state.config, caller);
+    arg.size() <= Guard.maxArgBytes and (Orders.isOperator(state.config, caller) or ops.guardians.contains(caller));
   };
 
   // Background worker. Money already in flight (payouts, refunds) goes first; then deposit

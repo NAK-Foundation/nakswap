@@ -84,7 +84,7 @@ load(path.join(root, 'src'), 'src', (virt, s) => {
   return s
     // No management canister either: setHelpers' controller check falls back to the admin,
     // and helper verification (canister_info) is skipped.
-    .replace('if (not caller.isController()) { return false };', 'if (not Orders.isAdmin(state.config, caller)) { return false };')
+    .replaceAll('if (not caller.isController()) { return false };', 'if (not Orders.isAdmin(state.config, caller)) { return false };')
     .replace('await* verifyHelpers(list, moduleHash)', 'true')
     .replace(/Cycles\.balance\(\)/g, '(10_000_000_000_000 : Nat)')
     .replace(/caller\.isController\(\)/g, 'false')

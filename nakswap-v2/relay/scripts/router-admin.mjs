@@ -17,6 +17,8 @@
 //   ... helpers                       (swap helpers and whether each is busy)
 //   ... set-helpers id1,id2,id3 [helper.wasm]  (checks each runs exactly that wasm; default ../build/helper.wasm)
 //   ... recover-stray <principal>     (funds strangers sent to helpers, set aside by them)
+//   ... add-guardian <principal>      (admin dashboard sign-in: watch, freeze/unfreeze, request audits)
+//   ... remove-guardian <principal> | guardians | audits
 //   ... helper-unused <i>             (what ICPSwap holds for helper i)
 //   ... helper-withdraw <i> icp|nak <amount>   (helper i pulls it out of the pool)
 //   ... helper-recover <i> [orderId]  (helper i: pool leftovers + everything it holds -> that order's
@@ -83,6 +85,10 @@ const healthIdl = ({ IDL }) =>
     setFee: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Bool], []),
     sweepFees: IDL.Func([], [IDL.Nat], []),
     recoverDeposit: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
+    addGuardian: IDL.Func([IDL.Principal], [IDL.Bool], []),
+    removeGuardian: IDL.Func([IDL.Principal], [IDL.Bool], []),
+    guardians: IDL.Func([], [IDL.Vec(IDL.Principal)], ['query']),
+    auditRequests: IDL.Func([], [IDL.Vec(IDL.Record({ id: IDL.Nat, at: IDL.Int, note: IDL.Text }))], ['query']),
     recoverStray: IDL.Func([IDL.Principal], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     poolUnusedBalance: IDL.Func([], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     withdrawFromPool: IDL.Func([IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
@@ -186,6 +192,13 @@ if (cmd === 'health') {
   const list = (a || '').split(',').map((x) => x.trim()).filter(Boolean).map((x) => Principal.fromText(x));
   const hash = crypto.createHash('sha256').update(fs.readFileSync(b || new URL('../../build/helper.wasm', import.meta.url))).digest();
   console.log('setHelpers', list.map((p) => p.toText()), 'module', hash.toString('hex'), await router.setHelpers(list, Uint8Array.from(hash)));
+} else if (cmd === 'add-guardian' || cmd === 'remove-guardian') {
+  const p = Principal.fromText(a);
+  console.log(cmd, p.toText(), await (cmd === 'add-guardian' ? router.addGuardian(p) : router.removeGuardian(p)));
+} else if (cmd === 'guardians') {
+  console.log((await router.guardians()).map((p) => p.toText()));
+} else if (cmd === 'audits') {
+  for (const r of await router.auditRequests()) console.log(`#${r.id}`, new Date(Number(r.at / 1_000_000n)).toISOString(), r.note);
 } else if (cmd === 'recover-stray') {
   const r = await router.recoverStray(Principal.fromText(a));
   console.log('ok' in r ? `recovered ${Number(r.ok.icp) / 1e8} ICP and ${Number(r.ok.nak) / 1e8} NAK` : r.err);
@@ -205,6 +218,6 @@ if (cmd === 'health') {
   });
   console.log('freezing threshold set to', a, 'days');
 } else {
-  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | helpers | set-helpers | helper-unused | helper-withdraw | helper-recover | clear-helper | recover-stray | set <field> <value> | pause | unpause | freezing-days <n>');
+  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | helpers | set-helpers | helper-unused | helper-withdraw | helper-recover | clear-helper | recover-stray | add-guardian | remove-guardian | guardians | audits | set <field> <value> | pause | unpause | freezing-days <n>');
   console.log('fields:', Object.keys(FIELDS).join(', '));
 }

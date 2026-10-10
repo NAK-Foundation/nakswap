@@ -52,6 +52,29 @@ const SECURITY_HEADERS = {
   'Cross-Origin-Opener-Policy': 'same-origin',
 };
 
+// The admin dashboard (/admin) talks to the Internet Computer from the browser and signs in
+// with Internet Identity in a popup, so it needs IC hosts in connect-src and a COOP that
+// keeps the popup's opener link. Its script is a same-origin file (no inline script).
+const ADMIN_HEADERS = {
+  ...SECURITY_HEADERS,
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    "img-src 'self' data:",
+    "connect-src 'self' https://icp-api.io https://icp0.io https://*.icp0.io https://ic0.app https://*.ic0.app https://id.ai https://*.id.ai",
+    "frame-src https://id.ai https://*.id.ai",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join('; '),
+  'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+  'X-Robots-Tag': 'noindex, nofollow',
+  'Cache-Control': 'no-store',
+};
+
 const json = (res, code, body) => {
   // No CORS headers: the API is for this page only (same origin), so other sites can't
   // spend the Houdini quota or open orders through it from a visitor's browser.
@@ -146,13 +169,14 @@ function limiter(max, windowMs) {
 const statusName = (s) => Object.keys(s)[0];
 
 function serveStatic(req, res, pathname) {
-  const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  const rel = pathname === '/' ? 'index.html' : pathname === '/admin' || pathname === '/admin/' ? 'admin/index.html' : pathname.replace(/^\/+/, '');
+  const isAdminPage = rel === 'admin/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return false;
   res.writeHead(200, {
-    ...SECURITY_HEADERS,
+    ...(isAdminPage ? ADMIN_HEADERS : SECURITY_HEADERS),
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': rel === 'index.html' ? 'no-cache' : 'public, max-age=300',
+    'Cache-Control': isAdminPage ? 'no-store' : rel === 'index.html' || rel.startsWith('admin/') ? 'no-cache' : 'public, max-age=300',
   });
   fs.createReadStream(file)
     .on('error', () => res.destroy())

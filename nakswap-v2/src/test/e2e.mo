@@ -447,6 +447,26 @@ actor Test {
     await houdiniPays(o9d.depositAccountId, ICP / 1000);
     check("a funded order can't be cancelled", not (await router.cancelUnfunded(o9d.id)));
     check("strangers can't cancel", not (await stranger.tryCancel(routerId, o9.id)));
+
+    // Admin dashboard guardians.
+    let sId = Principal.fromActor(stranger);
+    check("admin role", (await router.myRole()) == #admin);
+    check("stranger can't freeze or watch", not (await stranger.tryPause(routerId, true)) and not (await stranger.tryOverview(routerId)));
+    check("stranger can't request audits", (await stranger.tryAudit(routerId, "x")) == null);
+    check("guardian added", await router.addGuardian(sId));
+    check("guardian can watch", await stranger.tryOverview(routerId));
+    check("guardian can freeze", (await stranger.tryPause(routerId, true)) and (await router.health()).paused);
+    check("frozen router refuses new orders", switch (await router.createOrder({ recipient = alice; refundTo = null; minNakOut = null })) { case (#err(#paused)) { true }; case _ { false } });
+    check("guardian can unfreeze", (await stranger.tryPause(routerId, false)) and not (await router.health()).paused);
+    check("guardian still can't open orders", not (await stranger.tryCreate(routerId, alice)));
+    check("guardian can't change the fee", not (await stranger.trySetFee(routerId, alice)));
+    let aud = await stranger.tryAudit(routerId, "please check the helpers");
+    check("guardian requests an audit", aud == ?0);
+    check("one request per 10 minutes", (await stranger.tryAudit(routerId, "again")) == null);
+    check("audit requests are listed publicly (no principals)", switch ((await router.auditRequests()).values().next()) { case (?r) { r.note == "please check the helpers" }; case null { false } });
+    let ov = switch (await router.adminOverview()) { case (?o) { o }; case null { Runtime.trap("no overview") } };
+    check("overview counts orders (" # debug_show ov.counts # ")", ov.counts.size() == 8 and ov.recent.size() > 0 and ov.helpers.size() == 3);
+    check("guardian removed", (await router.removeGuardian(sId)) and not (await stranger.tryOverview(routerId)));
     check("oversized houdini id rejected", not (await router.attachHoudini(o0.id, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")));
     let selfRes = await router.createOrder({ recipient = routerId; refundTo = null; minNakOut = null });
     check("router itself rejected as recipient", switch selfRes { case (#err(#invalidRecipient)) { true }; case _ { false } });

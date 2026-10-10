@@ -12,6 +12,24 @@ actor class Stranger() {
     poke : shared Nat -> async Types.PokeResult;
     getOrder : shared query Nat -> async ?Types.OrderView;
     cancelUnfunded : shared Nat -> async Bool;
+    setPaused : shared Bool -> async Bool;
+    adminOverview : shared query () -> async ?Types.Overview;
+    requestAudit : shared Text -> async ?Nat;
+  };
+
+  public func tryPause(router : Principal, b : Bool) : async Bool {
+    let r : RouterApi = actor (router.toText());
+    await r.setPaused(b);
+  };
+
+  public func tryOverview(router : Principal) : async Bool {
+    let r : RouterApi = actor (router.toText());
+    (await r.adminOverview()) != null;
+  };
+
+  public func tryAudit(router : Principal, note : Text) : async ?Nat {
+    let r : RouterApi = actor (router.toText());
+    await r.requestAudit(note);
   };
 
   public func tryCancel(router : Principal, id : Nat) : async Bool {

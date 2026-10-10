@@ -11,6 +11,7 @@
 // until an admin recovers those funds to the right order.
 //
 // Only the router can call it (and controllers can upgrade it). No ingress at all.
+import Cycles "mo:core/Cycles";
 import Error "mo:core/Error";
 import Int "mo:core/Int";
 import Nat "mo:core/Nat";
@@ -43,6 +44,11 @@ actor class Helper(router : Principal, icpLedger : Principal, nakLedger : Princi
   let main : Ext.Account = { owner = Principal.fromActor(this); subaccount = null };
 
   public query func routerId() : async Principal { router };
+
+  // For the admin dashboard and monitoring.
+  public query func health() : async { cycles : Nat; busy : Bool; lastClean : Bool } {
+    { cycles = Cycles.balance(); busy; lastClean };
+  };
 
   public shared ({ caller }) func swap(job : Ext.HelperJob) : async Ext.HelperResult {
     if (caller != router) { return #notAuthorized };

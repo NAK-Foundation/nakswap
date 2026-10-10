@@ -1,0 +1,12 @@
+Bundled license information:
+
+@noble/curves/utils.js:
+@noble/curves/abstract/modular.js:
+@noble/curves/abstract/curve.js:
+@noble/curves/abstract/weierstrass.js:
+@noble/curves/abstract/bls.js:
+@noble/curves/abstract/tower.js:
+@noble/curves/bls12-381.js:
+@noble/curves/abstract/edwards.js:
+@noble/curves/ed25519.js:
+  /*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */

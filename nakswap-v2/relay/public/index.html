@@ -399,12 +399,14 @@
   }
 
   // ---------- token picker ----------
-  let searchTimer = null;
+  let searchTimer = null, tokenSeq = 0;
   async function loadTokens(term) {
     const list = $('tokenList');
+    const seq = ++tokenSeq;
     list.innerHTML = '<div class="muted" style="padding:12px">Loading…</div>';
     try {
       const { tokens } = await api(`/api/tokens?term=${encodeURIComponent(term || '')}`);
+      if (seq !== tokenSeq) return; // a newer search has started
       const usable = tokens.filter((t) => !(t.symbol === 'ICP' && t.chain === 'icp'));
       if (!usable.length) { list.innerHTML = '<div class="muted" style="padding:12px">No tokens match. Try a ticker like USDT, BTC or SOL.</div>'; return; }
       list.innerHTML = usable.map((t, i) => `
@@ -414,7 +416,7 @@
         </button>`).join('');
       list.querySelectorAll('.titem').forEach((b) => b.addEventListener('click', () => { pickToken(usable[Number(b.dataset.i)]); $('tokenDlg').close(); }));
     } catch (e) {
-      list.innerHTML = `<div class="err" style="padding:12px">${esc(e.message)}</div>`;
+      if (seq === tokenSeq) list.innerHTML = `<div class="err" style="padding:12px">${esc(e.message)}</div>`;
     }
   }
   function pickToken(t) {

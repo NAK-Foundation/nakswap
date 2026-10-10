@@ -925,6 +925,16 @@
   showRecipient();
   const savedToken = store.get('nak.token', null);
   if (savedToken) pickToken(savedToken);
+  else presetToken();
+  // First visit: preset USDC on Solana, the token most visitors already hold.
+  // A visitor's own pick (saved on this device) always wins over the preset.
+  async function presetToken() {
+    try {
+      const { tokens } = await api('/api/tokens?term=USDC');
+      const t = tokens.find((x) => x.symbol === 'USDC' && x.chain === 'solana');
+      if (t && !token) pickToken(t);
+    } catch {}
+  }
   loadHealth().then(updateSwapBtn);
   setInterval(loadHealth, 60_000);
   loadStats();

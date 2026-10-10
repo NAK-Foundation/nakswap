@@ -67,6 +67,7 @@ module {
     minNakOut : Nat;
     createdAt : Int;
     depositAccountId : Text; // hex, what goes into Houdini's addressTo
+    depositSubaccount : Blob;
     houdiniId : ?Text;
     status : Status;
   };
@@ -114,6 +115,13 @@ module {
     var paidTotal : Nat; // e8s delivered to fee wallets so far
     var stuck : Nat; // e8s whose sweep outcome is unknown (verify on the ledger)
     var pending : ?FeeSweep;
+  };
+
+  // Random secret behind the deposit subaccounts, plus the cursor of the background pass
+  // that forgets old Houdini order ids.
+  public type PrivacyState = {
+    var secret : Blob;
+    var redactCursor : Nat;
   };
 
   public type FeeStatus = {

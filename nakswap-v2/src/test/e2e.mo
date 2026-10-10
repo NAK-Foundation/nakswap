@@ -149,10 +149,13 @@ actor Test {
     // ---- 0. deposit account id matches the ledger's own derivation ----
     Debug.print("0. deposit account");
     let o0 = await newOrder(alice, null);
-    let ledgerView = await icp.accountIdHex({ owner = routerId; subaccount = ?Account.orderSubaccount(o0.id) });
+    let ledgerView = await icp.accountIdHex({ owner = routerId; subaccount = ?o0.depositSubaccount });
     check("router and ledger agree on account id", ledgerView == o0.depositAccountId);
+    check("deposit subaccount is not the guessable order-number pattern", o0.depositSubaccount != Account.orderSubaccount(o0.id));
+    let o0b = await newOrder(alice, null);
+    check("deposit subaccounts differ per order", o0b.depositSubaccount != o0.depositSubaccount and o0b.depositSubaccount.size() == 32);
     check("account id is 64 hex chars", o0.depositAccountId.size() == 64);
-    Debug.print("  VECTOR router=" # routerId.toText() # " sub=" # Account.toHex(Account.orderSubaccount(o0.id)) # " aid=" # o0.depositAccountId);
+    Debug.print("  VECTOR router=" # routerId.toText() # " sub=" # Account.toHex(o0.depositSubaccount) # " aid=" # o0.depositAccountId);
 
     // ---- 1. happy path ----
     Debug.print("1. happy path: 5 ICP -> NAK to alice");
@@ -167,7 +170,7 @@ actor Test {
     let aliceNak = await nak.icrc1_balance_of({ owner = alice; subaccount = null });
     // pool withdraw fee + router payout fee
     check("alice got quote minus two NAK fees (" # aliceNak.toText() # " vs quote " # quoted.toText() # ")", aliceNak == quoted - 2 * nakFee);
-    check("deposit subaccount drained", (await icp.icrc1_balance_of({ owner = routerId; subaccount = ?Account.orderSubaccount(o0.id) })) == 0);
+    check("deposit subaccount drained", (await icp.icrc1_balance_of({ owner = routerId; subaccount = ?o0.depositSubaccount })) == 0);
     check("router main holds exactly the 1% fee", (await icp.icrc1_balance_of(routerMain)) == fee1);
     check("router main holds no NAK", (await nak.icrc1_balance_of(routerMain)) == 0);
     let fs1 = await router.feeStatus();
@@ -257,6 +260,12 @@ actor Test {
     check("expired", statusTag(await statusOf(o7.id)) == "expired");
     let o7b = await newOrder(alice, null); // never paired with a Houdini exchange
     check("unpaired order is deleted, not kept", (await router.poke(o7b.id)) == #notFound and (await router.getOrder(o7b.id)) == null);
+    // Someone pays into the deleted order's account anyway: the admin can still get it back.
+    await houdiniPays(o7b.depositAccountId, ICP);
+    let frank = Principal.fromText("ufxgi-4p777-77774-qaadq-cai");
+    let rec = await router.recoverDeposit(o7b.id, frank);
+    check("stray deposit recovered (" # debug_show rec # ")", rec == #ok(ICP - icpFee) and (await icp.icrc1_balance_of({ owner = frank; subaccount = null })) == ICP - icpFee);
+    check("recover refuses unknown order ids", switch (await router.recoverDeposit(o7.id + 100, frank)) { case (#err _) { true }; case _ { false } });
     check("reopen works", (await router.reopen(o7.id)) == ?#awaitingDeposit);
     ignore await router.setConfig(cfg);
 

@@ -106,12 +106,14 @@ test('mock flow: quote -> order -> Houdini pays the deposit account -> NAK deliv
     assert.equal(ic.orders.get(0n).houdiniId[0], o.body.houdiniId, 'router order is linked to the Houdini order');
 
     await new Promise((r) => setTimeout(r, 80));
-    const view = `/api/orders/${o.body.orderId}?key=${o.body.orderKey}`;
-    assert.equal((await call('GET', `/api/orders/${o.body.orderId}`)).code, 404, 'no key, no order');
-    assert.equal((await call('GET', `/api/orders/${o.body.orderId}?key=00000000000000000000`)).code, 404, 'wrong key, no order');
-    await call('GET', view); // triggers mock payout
+    const view = `/api/orders/${o.body.orderId}`;
+    const key = { 'x-order-key': o.body.orderKey };
+    assert.equal((await call('GET', view)).code, 404, 'no key, no order');
+    assert.equal((await call('GET', view, undefined, { 'x-order-key': '00000000000000000000' })).code, 404, 'wrong key, no order');
+    assert.equal((await call('GET', `${view}?key=${o.body.orderKey}`)).code, 404, 'key in the URL is not accepted');
+    await call('GET', view, undefined, key); // triggers mock payout
     await new Promise((r) => setTimeout(r, 20));
-    const s = await call('GET', view);
+    const s = await call('GET', view, undefined, key);
     assert.equal(s.body.houdini.statusLabel, 'COMPLETED');
     assert.equal(s.body.stage, 'completed', 'relay pokes the router once Houdini reports COMPLETED');
   } finally {

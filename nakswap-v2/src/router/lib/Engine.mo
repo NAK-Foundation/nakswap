@@ -215,7 +215,7 @@ module {
         to = main;
         amount = sweepAmount;
         fee = ?fee;
-        memo = ?Account.memo(order.id);
+        memo = null; // no order number on chain: nothing ties this transfer to an order
         created_at_time = null;
       });
     } catch (e) {
@@ -242,7 +242,7 @@ module {
         expected_allowance = null;
         expires_at = null;
         fee = ?fee;
-        memo = ?Account.memo(order.id);
+        memo = null; // no order number on chain: nothing ties this transfer to an order
         created_at_time = null;
       });
     } catch (e) { #Err(#GenericError({ error_code = 0; message = e.message() })) };
@@ -396,7 +396,7 @@ module {
         to = { owner = order.recipient; subaccount = null };
         amount = p.nakAmount;
         fee = ?cfg.nakFee;
-        memo = ?Account.memo(order.id);
+        memo = null; // no order number on chain: nothing ties this transfer to an order
         created_at_time = ?p.createdAtTime;
       });
     } catch (_) { return };
@@ -430,7 +430,7 @@ module {
         to = { owner = order.refundTo; subaccount = null };
         amount = r.icpAmount;
         fee = ?cfg.icpFee;
-        memo = ?Account.memo(order.id);
+        memo = null; // no order number on chain: nothing ties this transfer to an order
         created_at_time = ?r.createdAtTime;
       });
     } catch (_) { return };

@@ -6,8 +6,7 @@ import Types "../types";
 
 module {
 
-  public func create(id : Nat, self : Principal, args : Types.CreateOrderArgs) : Types.Order {
-    let sub = Account.orderSubaccount(id);
+  public func create(id : Nat, self : Principal, sub : Blob, args : Types.CreateOrderArgs) : Types.Order {
     {
       id;
       recipient = args.recipient;
@@ -30,6 +29,7 @@ module {
       minNakOut = self.minNakOut;
       createdAt = self.createdAt;
       depositAccountId = Account.toHex(self.depositAccountId);
+      depositSubaccount = self.subaccount;
       houdiniId = self.houdiniId;
       status = self.status;
     };

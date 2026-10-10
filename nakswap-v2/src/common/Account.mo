@@ -25,6 +25,24 @@ module {
     ).toBlob();
   };
 
+  // Unlinkable deposit subaccount: a keyed hash of the order id under the router's random
+  // secret (SHA-224 via the ledger account-id derivation). Outsiders can't enumerate the
+  // router's deposit accounts or tie one to an order number; the router can always rebuild
+  // it from (secret, id) to recover stray funds.
+  public func depositSubaccount(self : Principal, secret : Blob, id : Nat) : Blob {
+    let s = secret.toArray();
+    let input = Array.tabulate<Nat8>(
+      32,
+      func i {
+        if (i < 24) { s[i] } else {
+          let shift = (31 - i : Int).toNat() * 8;
+          ((id / Nat.pow(2, shift)) % 256).toNat8();
+        };
+      },
+    ).toBlob();
+    self.toLedgerAccount(?input);
+  };
+
   // ICP ledger account identifier: CRC32 || SHA224("\x0Aaccount-id" || principal || subaccount).
   public func accountId(owner : Principal, subaccount : ?Blob) : Blob {
     owner.toLedgerAccount(subaccount);

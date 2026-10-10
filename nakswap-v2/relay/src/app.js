@@ -13,6 +13,8 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.png': 'image/png',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 // Sent with every response. The page's own script and styles are inline, fonts come from
@@ -21,8 +23,8 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
     "img-src 'self' https: data:",
     "connect-src 'self'",
     "frame-ancestors 'none'",
@@ -273,12 +275,13 @@ export function createApp({
         user,
       });
     } catch (e) {
-      log('houdini createExchange failed', { order: order.id.toString(), err: e.message });
+      log('houdini createExchange failed', { order: order.id.toString(), status: e.status ?? null });
       throw Object.assign(new Error(`Houdini did not accept the order: ${e.message}`), { status: e.status === 422 ? 422 : 502 });
     }
     // 3. Link them so support can trace either side.
     await ic.attachHoudini(order.id, ex.houdiniId);
-    log('order', { id: order.id.toString(), houdini: ex.houdiniId, in: `${ex.inAmount} ${ex.inSymbol}` });
+    // Privacy: logs keep only the order number; no principals, addresses, amounts or IPs.
+    log('order', { id: order.id.toString() });
     return [
       201,
       {
@@ -415,13 +418,14 @@ export function createApp({
       }
       const m = url.pathname.match(/^\/api\/orders\/(\d+)$/);
       if (req.method === 'GET' && m) {
-        const [code, body] = await getOrder(m[1], url.searchParams.get('key'), user);
+        const [code, body] = await getOrder(m[1], req.headers['x-order-key'], user);
         return json(res, code, body);
       }
       if (req.method === 'GET' && !url.pathname.startsWith('/api/') && serveStatic(req, res, url.pathname)) return;
       return json(res, 404, { error: 'not found' });
     } catch (e) {
-      log('error', e.message);
+      // Error text can echo addresses or principals back; mask anything that looks like one.
+      log('error', String(e.message).replace(/[A-Za-z0-9-]{20,}/g, '…').slice(0, 200));
       return json(res, e.status && e.status < 500 ? e.status : e.status === 503 ? 503 : 502, { error: e.message });
     }
   };

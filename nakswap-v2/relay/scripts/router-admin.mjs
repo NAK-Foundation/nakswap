@@ -8,6 +8,7 @@
 //   ... fees                          (NAKSwap fee: rate, wallet, accrued, paid so far)
 //   ... set-fee 1 <principal>         (fee in %, max 5; wallet that receives it)
 //   ... sweep-fees                    (send accrued fees now instead of waiting for 0.05 ICP)
+//   ... recover <orderId> <principal> (ICP stranded in a finished or deleted order's deposit account)
 //
 // Use CONTROLLER_SEED=<64 hex> instead of CONTROLLER_PEM if you have the raw seed.
 import crypto from 'node:crypto';
@@ -67,6 +68,7 @@ const healthIdl = ({ IDL }) =>
     ),
     setFee: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Bool], []),
     sweepFees: IDL.Func([], [IDL.Nat], []),
+    recoverDeposit: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
     setConfig: IDL.Func([routerIdl({ IDL })._fields.find(([n]) => n === 'getConfig')[1].retTypes[0]], [IDL.Bool], []),
     setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
   });
@@ -139,6 +141,9 @@ if (cmd === 'health') {
 } else if (cmd === 'sweep-fees') {
   const sent = await router.sweepFees();
   console.log('swept', Number(sent) / 1e8, 'ICP');
+} else if (cmd === 'recover') {
+  const r = await router.recoverDeposit(BigInt(a), Principal.fromText(b));
+  console.log('ok' in r ? `recovered ${Number(r.ok) / 1e8} ICP to ${b}` : `not recovered: ${r.err}`);
 } else if (cmd === 'freezing-days') {
   await mgmt.update_settings({
     canister_id: ROUTER,
@@ -147,6 +152,6 @@ if (cmd === 'health') {
   });
   console.log('freezing threshold set to', a, 'days');
 } else {
-  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | set <field> <value> | pause | unpause | freezing-days <n>');
+  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | set <field> <value> | pause | unpause | freezing-days <n>');
   console.log('fields:', Object.keys(FIELDS).join(', '));
 }

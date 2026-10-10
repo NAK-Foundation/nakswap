@@ -6,10 +6,14 @@
 <title>NAKSwap · New Age Kapital</title>
 <meta name="description" content="Swap almost any token into NAK. Houdiniswap converts it to ICP, then the NAKSwap router buys NAK on ICPSwap and sends it to your ICP principal.">
 <link rel="icon" href="/favicon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Oswald:wght@500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* Fonts are served from this site (OFL-licensed copies), so no visitor IP goes to Google. */
+  @font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url(/fonts/inter-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap; src: url(/fonts/inter-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap; src: url(/fonts/inter-latin-600-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Oswald"; font-style: normal; font-weight: 500; font-display: swap; src: url(/fonts/oswald-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url(/fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url(/fonts/jetbrains-mono-latin-500-normal.woff2) format("woff2"); }
   /* Design tokens copied from naktoken.lol so the two read as one product. */
   :root {
     --nak-bg: #08090a;
@@ -254,7 +258,7 @@
         <div class="block">
           <label class="label" for="recipient">Where should NAK go?</label>
           <div class="box"><input id="recipient" class="addr-in" placeholder="Your ICP principal, e.g. abcde-…-cai" autocomplete="off" spellcheck="false"></div>
-          <div class="help">Use the principal of a wallet you control (NNS, Plug or Oisy). Exchange accounts can't receive NAK.</div>
+          <div class="help">Use the principal of a wallet you control (NNS, Plug or Oisy). Exchange accounts can't receive NAK. For more privacy, use a fresh wallet: NAK payouts are public on the ICP ledger like any transfer.</div>
         </div>
 
         <div class="block">
@@ -322,10 +326,10 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const api = async (path, body) => {
+  const api = async (path, body, extraHeaders) => {
     const res = await fetch(path, {
       method: body ? 'POST' : 'GET',
-      headers: { 'Content-Type': 'application/json', 'x-user-timezone': tz },
+      headers: { 'Content-Type': 'application/json', 'x-user-timezone': tz, ...(extraHeaders || {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
@@ -506,7 +510,8 @@
       const q = await api('/api/quote', { fromId: token.id, amount, refundAddress: refund && checkRefund() ? refund : undefined });
       if (seq !== quoteSeq) return;
       routes = q.routes; quotedAt = q.quotedAt;
-      const prevType = chosen?.type;
+      // Keep the route type the visitor picked last time (e.g. Private), on this device.
+      const prevType = chosen?.type || store.get('nak.route', null);
       chosen = routes.find((r) => !r.blocked && r.type === prevType) || routes.find((r) => !r.blocked) || null;
       if (!routes.length) { clearQuote(`No route from ${token.symbol} to ICP right now. Try another amount or token.`); }
       else renderQuote(amount);
@@ -532,11 +537,11 @@
       <button class="route" type="button" data-i="${i}" aria-pressed="${r === chosen}" ${r.blocked ? 'disabled' : ''}>
         <i class="dot"></i>
         <b>${r.type === 'private' ? 'Private' : 'Standard'}</b>
-        <span>${r.type === 'private' ? 'Two hops break the trail.' : 'One hop, fastest.'} About ${esc(r.etaMinutes)} min via ${esc(r.provider)}.</span>
+        <span>${r.type === 'private' ? 'Two separate swaps, so the wallet you send from isn’t linked on-chain to the ICP.' : 'One hop, fastest.'} About ${esc(r.etaMinutes)} min via ${esc(r.provider)}.</span>
         <span class="nak">${fmt(e8(r.nakOut), 0)} NAK</span>
         ${r.blocked ? `<span class="why">Unavailable: ${esc(r.blocked)}</span>` : ''}
       </button>`).join('');
-    $('routes').querySelectorAll('.route').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; renderQuote(amount); updateAmountHint(); updateSwapBtn(); }));
+    $('routes').querySelectorAll('.route').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; store.set('nak.route', chosen.type); renderQuote(amount); updateAmountHint(); updateSwapBtn(); }));
     const r = chosen || routes[0];
     $('receiveAmt').textContent = `${fmt(e8(r.nakOut), 0)}`;
     $('receiveHint').textContent = r.blocked ? `Can't swap this amount: ${r.blocked}.` : `Minimum after 1% slippage: ${fmt(e8(r.minNakOut), 0)} NAK`;
@@ -631,7 +636,8 @@
   async function pollOrder(code) {
     try {
       const [id, key] = code.split('-');
-      const o = await api(`/api/orders/${id}?key=${encodeURIComponent(key || '')}`);
+      // The key travels in a header, not the URL, so it never lands in access logs.
+      const o = await api(`/api/orders/${id}`, undefined, { 'x-order-key': key || '' });
       $('orderErr').textContent = '';
       const h = o.houdini;
       if (h?.send) renderDeposit(h.send);
@@ -689,7 +695,13 @@
   });
   function renderRecent() {
     const ids = store.get('nak.recent', []).filter((i) => /^\d+-[0-9a-f]{20}$/.test(i));
-    $('recent').innerHTML = ids.length ? `Your recent orders: ${ids.map((i) => `<a href="#order=${esc(i)}">#${esc(i.split('-')[0])}</a>`).join(' ')}` : '';
+    $('recent').innerHTML = ids.length ? `Your recent orders: ${ids.map((i) => `<a href="#order=${esc(i)}">#${esc(i.split('-')[0])}</a>`).join(' ')} · <a href="#" id="forget">Forget on this device</a>` : '';
+    $('forget')?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      try { Object.keys(localStorage).filter((k) => k.startsWith('nak.')).forEach((k) => localStorage.removeItem(k)); } catch {}
+      $('recipient').value = '';
+      renderRecent();
+    });
   }
   function route() {
     const m = location.hash.match(/order=(\d+-[0-9a-f]{20})/);

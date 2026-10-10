@@ -5,8 +5,11 @@ import Iter "mo:core/Iter";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
+import Result "mo:core/Result";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
+import Account "../../common/Account";
+import Ext "../../common/Ext";
 import Engine "../lib/Engine";
 import Guard "../lib/Guard";
 import Orders "../lib/Orders";
@@ -15,8 +18,10 @@ import Types "../types";
 mixin (
   state : Types.RouterState,
   fees : Types.FeeState,
+  privacy : Types.PrivacyState,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
+  self : Principal,
 ) {
 
   public query func getConfig() : async Types.Config { state.config };
@@ -116,6 +121,43 @@ mixin (
       activeOrders = active.size();
       nextOrderId = state.nextId;
       feeBps = fees.bps;
+    };
+  };
+
+  // ICP that landed in a deposit account with no order to handle it (an order that was
+  // never paired with Houdini and got cleaned up, or one already finished). Sends the whole
+  // balance, minus the ledger fee, to `to`.
+  public shared ({ caller }) func recoverDeposit(id : Nat, to : Principal) : async Result.Result<Nat, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    if (to.isAnonymous()) { return #err("anonymous destination") };
+    let sub = switch (orders.get(id)) {
+      case null {
+        if (privacy.secret.size() < 24 or id >= state.nextId) { return #err("no such order") };
+        Account.depositSubaccount(self, privacy.secret, id);
+      };
+      case (?o) {
+        switch (o.status) {
+          case (#completed _ or #refunded _ or #expired or #needsReview _) { o.subaccount };
+          case _ { return #err("order is still being processed") };
+        };
+      };
+    };
+    let cfg = state.config;
+    let ledger : Ext.Ledger = actor (cfg.icpLedger.toText());
+    let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?sub });
+    if (bal <= cfg.icpFee) { return #err("nothing to recover") };
+    switch (
+      await ledger.icrc1_transfer({
+        from_subaccount = ?sub;
+        to = { owner = to; subaccount = null };
+        amount = bal - cfg.icpFee;
+        fee = ?cfg.icpFee;
+        memo = null;
+        created_at_time = null;
+      })
+    ) {
+      case (#Ok _) { #ok(bal - cfg.icpFee) };
+      case (#Err _) { #err("ledger transfer failed") };
     };
   };
 

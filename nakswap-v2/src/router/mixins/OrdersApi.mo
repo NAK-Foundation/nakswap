@@ -2,9 +2,11 @@ import Cycles "mo:core/Cycles";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
+import Random "mo:core/Random";
 import Result "mo:core/Result";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
+import Account "../../common/Account";
 import Engine "../lib/Engine";
 import Guard "../lib/Guard";
 import Orders "../lib/Orders";
@@ -13,6 +15,7 @@ import Types "../types";
 mixin (
   state : Types.RouterState,
   fees : Types.FeeState,
+  privacy : Types.PrivacyState,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
   self : Principal,
@@ -25,6 +28,11 @@ mixin (
     if (not Orders.isOperator(cfg, caller)) { return #err(#notAuthorized) };
     // Low cycles counts as paused: no new orders until the canister is topped up.
     if (cfg.paused or Cycles.balance() < Guard.lowCycles) { return #err(#paused) };
+    // First order after install: fetch the random secret behind deposit subaccounts.
+    if (privacy.secret.size() < 24) {
+      let r = await Random.blob();
+      if (privacy.secret.size() < 24) { privacy.secret := r };
+    };
     if (args.recipient.isAnonymous()) { return #err(#anonymousRecipient) };
     // Paying the router itself would strand the NAK / ICP in its main account.
     if (args.recipient == self or args.refundTo == ?self) { return #err(#invalidRecipient) };
@@ -32,7 +40,7 @@ mixin (
     if (active.size() >= Guard.maxOpenOrders) { return #err(#tooManyOpenOrders) };
     let id = state.nextId;
     state.nextId += 1;
-    let order = Orders.create(id, self, args);
+    let order = Orders.create(id, self, Account.depositSubaccount(self, privacy.secret, id), args);
     orders.add(id, order);
     active.add(id);
     #ok(order.toView());

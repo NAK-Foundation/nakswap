@@ -153,6 +153,26 @@ Cycle safeguards (`src/router/lib/Guard.mo`):
 
 Upgrades: `MODE=upgrade CANISTER_ID=bkyfl-uyaaa-aaaab-qhl5q-cai` with `scripts/deploy-router.mjs`.
 
+## User privacy
+
+What is and isn't private: everything on the ICP and NAK ledgers is public, so the final NAK
+payout to a principal is visible to anyone. What NAKSwap does to keep the rest unlinkable:
+- **Private route**: Houdini's private route uses two separate swaps, so the sending wallet
+  isn't linked on-chain to the ICP. The page remembers the visitor's route choice.
+- **Unlinkable deposit accounts**: each order's deposit subaccount is a keyed hash of the
+  order id under a random secret the router fetched from the IC (`raw_rand`). Outsiders can't
+  enumerate the router's deposit accounts or match one to an order number.
+- **No order numbers on chain**: sweeps, approvals, payouts and refunds carry no memo.
+- **Forgetting**: 30 days after an order finishes, the router drops its Houdini order id (the
+  link back to the sending wallet). Orders never paired with Houdini are deleted after 15 min.
+  `recoverDeposit` (admin) can still return ICP that lands in a deleted order's account.
+- **Relay**: order lookups need the order key, sent in a header (never in URLs or logs); logs
+  hold only order numbers; fonts are self-hosted, so pages make no third-party calls except
+  token icons. Houdini requires the visitor's IP, user agent and timezone on each request
+  (compliance headers); the relay passes them through and stores none of them.
+- **Tip for users**: receive into a fresh principal if you don't want the NAK tied to your
+  main wallet.
+
 ## Abuse and cycle-drain protection
 
 Router (`src/router/main.mo`, `lib/Guard.mo`):

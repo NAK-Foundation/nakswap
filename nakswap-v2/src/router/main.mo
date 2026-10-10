@@ -7,6 +7,7 @@ import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
+import Random "mo:core/Random";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Timer "mo:core/Timer";
@@ -33,14 +34,17 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     var pending = null;
   };
 
+  // Added for unlinkable deposit accounts; the secret is fetched from the IC's randomness.
+  let privacy : Types.PrivacyState = { var secret = ""; var redactCursor = 0 };
+
   transient let self = Principal.fromActor(this);
 
   // Runs on install and on every upgrade: a lock left set by an interrupted swap would
   // otherwise block the router forever. Interrupted swaps surface as #needsReview.
   state.busy := false;
 
-  include OrdersApi(state, fees, orders, active, self);
-  include AdminApi(state, fees, orders, active);
+  include OrdersApi(state, fees, privacy, orders, active, self);
+  include AdminApi(state, fees, privacy, orders, active, self);
 
   // Ingress filter, run before a message is accepted, so rejected calls cost the canister
   // nothing. Every update method is for the relay, the admin or a controller; everyone else
@@ -98,7 +102,41 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     };
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
+    forgetOldHoudiniIds(now);
   };
+
+  // Walks a few orders per tick; finished orders older than 30 days drop their Houdini id.
+  func forgetOldHoudiniIds(now : Int) {
+    var seen = 0;
+    var last : ?Nat = null;
+    label walk for ((id, o) in orders.entriesFrom(privacy.redactCursor)) {
+      if (seen >= 25) { break walk };
+      seen += 1;
+      last := ?id;
+      switch (o.status, o.houdiniId) {
+        case ((#completed _ or #refunded _), ?_) {
+          if (now - o.createdAt > Guard.forgetHoudiniAfterNanos) { o.houdiniId := null };
+        };
+        case _ {};
+      };
+    };
+    privacy.redactCursor := switch last {
+      case (?id) { if (seen < 25) { 0 } else { id + 1 } };
+      case null { 0 };
+    };
+  };
+
+  // Fetch the deposit-account secret right after install/upgrade so the first user doesn't
+  // wait for it (createOrder also fetches it if this hasn't run yet).
+  transient let _seed : ?Timer.TimerId = if (tickSeconds > 0 and privacy.secret.size() < 24) {
+    ?Timer.setTimer<system>(
+      #seconds(0),
+      func() : async () {
+        let r = await Random.blob();
+        if (privacy.secret.size() < 24) { privacy.secret := r };
+      },
+    );
+  } else { null };
 
   transient let _timer : ?Timer.TimerId = if (tickSeconds > 0) {
     ?Timer.recurringTimer<system>(#seconds(tickSeconds), tick);

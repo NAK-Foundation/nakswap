@@ -20,4 +20,8 @@ module {
   public let unattachedTtlSeconds : Nat = 900;
   // Most orders one tick walks per phase (payouts/refunds, then deposit checks).
   public let maxPerTick : Nat = 10;
+
+  // Privacy: Houdini order ids (the link back to the user's sending wallet) are forgotten
+  // this long after an order completes or is refunded.
+  public let forgetHoudiniAfterNanos : Int = 2_592_000_000_000_000; // 30 days
 };

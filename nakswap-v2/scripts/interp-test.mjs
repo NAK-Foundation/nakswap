@@ -79,7 +79,12 @@ load(path.join(root, 'src'), 'src', (virt, s) => {
   // nobody is a controller) so the e2e run exercises the order logic.
   s = flatten(virt, s);
   if (virt === 'src/router/main.mo') s = inlineModule(s, 'Engine', 'lib/Engine', 'router');
-  return s.replace(/Cycles\.balance\(\)/g, '(10_000_000_000_000 : Nat)').replace(/caller\.isController\(\)/g, 'false');
+  // No raw_rand either: a fixed 32-byte secret stands in for the IC's randomness.
+  const fixedSecret = '("' + '\\5a\\c3\\11\\9e'.repeat(8) + '" : Blob)';
+  return s
+    .replace(/Cycles\.balance\(\)/g, '(10_000_000_000_000 : Nat)')
+    .replace(/caller\.isController\(\)/g, 'false')
+    .replace(/await Random\.blob\(\)/g, fixedSecret);
 });
 
 const r = mo.run('src/test/e2e.mo');

@@ -86,7 +86,7 @@ Safety rails:
 |-|-|
 | `POST /api/quote` `{fromId, amount, refundAddress?}` | Houdini routes to ICP, each with the NAK the router would deliver, price impact, and `blocked` if the router would refund |
 | `POST /api/orders` `{quoteId, recipient, refundAddress, refundTo?, minNakOut?}` | router order → Houdini exchange (addressTo = deposit account) → linked; returns where to send funds |
-| `GET /api/orders/:id` | router stage + Houdini status; pokes the router once Houdini reports COMPLETED |
+| `GET /api/orders/:id?key=` | router stage + Houdini status; pokes the router once Houdini reports COMPLETED |
 | `GET /api/tokens?term=` | Houdini token search |
 
 Houdini quotes expire in about a minute, so the UI should create the order right after the user picks a route.
@@ -152,3 +152,27 @@ Cycle safeguards (`src/router/lib/Guard.mo`):
   or any cycles wallet and it resumes on its own.
 
 Upgrades: `MODE=upgrade CANISTER_ID=bkyfl-uyaaa-aaaab-qhl5q-cai` with `scripts/deploy-router.mjs`.
+
+## Abuse and cycle-drain protection
+
+Router (`src/router/main.mo`, `lib/Guard.mo`):
+- `inspect` ingress filter: every update call must come from the relay (operator), the admin
+  or a controller, with an argument under 2 KB. Everything else, including query methods
+  called as updates, is rejected before consensus, so it costs the canister nothing.
+- `poke`, `getOrder`, `activeOrderIds` are operator/admin only (order ids count up, so a
+  public `getOrder` would expose every user's principal). `health`, `getConfig`, `feeStatus`
+  stay public queries, which are free for the canister.
+- At most 150 open orders. The worker pays out and refunds first, then checks each waiting
+  deposit at most once a minute, least recently checked first, 10 per tick.
+- Orders the relay never paired with a Houdini exchange are deleted after 15 minutes.
+- `setConfig` rejects out-of-range values and can't change the ledgers or the pool;
+  `attachHoudini` is set-once; the router can't be its own recipient.
+
+Relay (`relay/src/app.js`, `server.js`):
+- Client IP from Railway's `X-Real-IP` (the left end of `X-Forwarded-For` is client-controlled).
+- Orders: 5 per IP per 10 min, 60 per hour overall. Quotes 30/min per IP, cached 20 s to save
+  the Houdini quota. Limiter memory is bounded.
+- Order links are `id-key`, where the key is an HMAC of the id under the relay seed; without
+  the key `/api/orders/:id` answers 404. One router poke per order per 15 s.
+- Input validation on every field, JSON only, 8 KB body cap, header/request timeouts,
+  no CORS, CSP + frame/sniffing/referrer headers.

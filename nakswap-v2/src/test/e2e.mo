@@ -157,7 +157,8 @@ actor Test {
     // ---- 1. happy path ----
     Debug.print("1. happy path: 5 ICP -> NAK to alice");
     await houdiniPays(o0.depositAccountId, 5 * ICP);
-    let quoted = switch (await pool.quote({ amountIn = (5 * ICP - 3 * icpFee).toText(); zeroForOne = false; amountOutMinimum = "0" })) {
+    let fee1 = 5 * ICP / 100; // NAKSwap fee, 1% default
+    let quoted = switch (await pool.quote({ amountIn = (5 * ICP - 3 * icpFee - fee1).toText(); zeroForOne = false; amountOutMinimum = "0" })) {
       case (#ok q) { q };
       case (#err _) { 0 };
     };
@@ -167,8 +168,23 @@ actor Test {
     // pool withdraw fee + router payout fee
     check("alice got quote minus two NAK fees (" # aliceNak.toText() # " vs quote " # quoted.toText() # ")", aliceNak == quoted - 2 * nakFee);
     check("deposit subaccount drained", (await icp.icrc1_balance_of({ owner = routerId; subaccount = ?Account.orderSubaccount(o0.id) })) == 0);
-    check("router main holds no ICP", (await icp.icrc1_balance_of(routerMain)) == 0);
+    check("router main holds exactly the 1% fee", (await icp.icrc1_balance_of(routerMain)) == fee1);
     check("router main holds no NAK", (await nak.icrc1_balance_of(routerMain)) == 0);
+    let fs1 = await router.feeStatus();
+    check("fee accrued = 1% of 5 ICP (" # fs1.accrued.toText() # ")", fs1.accrued == fee1 and fs1.bps == 100 and fs1.to == me);
+
+    // ---- 1b. fee sweep to the fee wallet ----
+    Debug.print("1b. fee sweep");
+    let feeWallet = Principal.fromText("qoctq-giaaa-aaaaa-aaaea-cai");
+    check("admin can set the fee wallet", await router.setFee(100, feeWallet));
+    check("fee above 5% rejected", not (await router.setFee(600, feeWallet)));
+    let swept = await router.sweepFees();
+    check("swept fee minus one ledger fee (" # swept.toText() # ")", swept == fee1 - icpFee);
+    check("fee wallet received it", (await icp.icrc1_balance_of({ owner = feeWallet; subaccount = null })) == fee1 - icpFee);
+    check("router main holds no ICP after sweep", (await icp.icrc1_balance_of(routerMain)) == 0);
+    let fs1b = await router.feeStatus();
+    check("accrued reset, paidTotal recorded", fs1b.accrued == 0 and fs1b.paidTotal == fee1 - icpFee and fs1b.pending == null);
+    check("nothing to sweep now", (await router.sweepFees()) == 0);
 
     // ---- 2. slippage: user floor above what the pool gives -> ICP refund ----
     Debug.print("2. slippage guard refunds ICP");
@@ -181,6 +197,7 @@ actor Test {
     // 2 ICP minus: sweep, approve, transfer_from, pool refund transfer, router refund transfer
     check("bob got ICP back minus 5 fees (" # bobIcp.toText() # ")", bobIcp == 2 * ICP - 5 * icpFee);
     check("bob got no NAK", (await nak.icrc1_balance_of({ owner = bob; subaccount = null })) == 0);
+    check("no fee taken on a refunded swap", (await router.feeStatus()).accrued == 0 and (await icp.icrc1_balance_of(routerMain)) == 0);
 
     // ---- 3. above maxOrderIcp -> refunded straight from the deposit account ----
     Debug.print("3. oversize deposit");
@@ -244,6 +261,9 @@ actor Test {
     Debug.print("8. access control");
     let stranger = await Stranger.Stranger();
     check("stranger cannot open orders", not (await stranger.tryCreate(routerId, alice)));
+    check("stranger cannot change the fee", not (await stranger.trySetFee(routerId, alice)));
+    check("stranger cannot sweep fees", (await stranger.trySweep(routerId)) == 0);
+    check("fee unchanged", (await router.feeStatus()).to == feeWallet);
     let anonRes = await router.createOrder({ recipient = user; refundTo = null; minNakOut = null });
     check("anonymous recipient rejected", switch anonRes { case (#err(#anonymousRecipient)) { true }; case _ { false } });
 

@@ -35,6 +35,7 @@ type Router =
    activeOrderIds: () -> (vec nat) query;
    attachHoudini: (id: nat, houdiniId: text) -> (bool);
    createOrder: (args: CreateOrderArgs) -> (Result);
+   feeStatus: () -> (FeeStatus) query;
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
    getConfig: () -> (Config) query;
    getOrder: (id: nat) -> (opt OrderView) query;
@@ -42,8 +43,11 @@ type Router =
    listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
    poke: (id: nat) -> (PokeResult);
    reopen: (id: nat) -> (opt Status);
+   resolveStuckFees: (delivered: bool) -> (bool);
    setConfig: (cfg: Config) -> (bool);
+   setFee: (bps: nat, to: principal) -> (bool);
    setPaused: (paused: bool) -> (bool);
+   sweepFees: () -> (nat);
  };
 type Result = 
  variant {
@@ -81,9 +85,27 @@ type Health =
    acceptingOrders: bool;
    activeOrders: nat;
    cycles: nat;
+   feeBps: nat;
    lowCyclesThreshold: nat;
    nextOrderId: nat;
    paused: bool;
+ };
+type FeeSweep = 
+ record {
+   amount: nat;
+   createdAtTime: nat64;
+   gross: nat;
+   to: principal;
+ };
+type FeeStatus = 
+ record {
+   accrued: nat;
+   autoSweepAt: nat;
+   bps: nat;
+   paidTotal: nat;
+   pending: opt FeeSweep;
+   stuck: nat;
+   to: principal;
  };
 type CreateOrderError = 
  variant {

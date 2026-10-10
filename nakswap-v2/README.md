@@ -35,6 +35,15 @@ what lets the second leg happen without the user signing anything after Houdini 
 If the swap can't happen safely (too small, too big, price impact, slippage, pool error)
 the ICP goes back to the user's principal instead (`refundTo`, defaults to the recipient).
 
+## NAKSwap fee
+
+1% of the ICP that Houdini delivers to the deposit account (`setFee`, max 5%). The router swaps
+`ICP − 1% − 3 ledger fees` for NAK and the 1% stays in its main account. It is counted as
+earned only when the swap produces NAK; if the swap is refunded, the user gets the full
+amount back and no fee is taken. Earned fees are swept to the fee wallet (default: the admin
+principal) once they reach 0.05 ICP, or on demand with `sweepFees`. The relay reads the rate
+from `health()`, so quotes and `minNakOut` already account for it.
+
 ## Mainnet facts this is built against (checked 2026-10-08)
 
 | | |
@@ -93,7 +102,7 @@ mops check                                     # type-check with your pinned moc
 ```
 
 The e2e run covers: account-id derivation, happy path, slippage refund, oversize refund,
-price-impact refund, payout retry after a ledger error (paid exactly once), pool failure →
+1% fee accrual and sweep, no fee on refunds, price-impact refund, payout retry after a ledger error (paid exactly once), pool failure →
 needsReview, expiry + reopen, access control. The interpreter can't run `mixin`s or
 module-level `async*` calls correctly, so `interp-test.mjs` inlines them into a temporary
 copy first; the canister source itself is unchanged.
@@ -111,7 +120,7 @@ Houdini can "pay", then `cd relay && cp .env.example .env && npm start`.
 
 1. Small live test (≈0.2 ICP): confirm ICPSwap's `depositFromAndSwap` accepts ICP pulled via ICRC-2 and what it returns on slippage; confirm a Houdini partner pays an ICP **account id** (not a principal) without a memo.
 2. Houdini partner key (partner portal) — the relay only.
-3. Decide on a NAKSwap fee (none today).
+3. NAKSwap fee: 1%, see above.
 4. Router config: `maxOrderIcp` / `maxImpactBps` sized to pool depth; consider raising depth before advertising.
 5. ICPSwap can queue withdrawals; a swap that lands in `needsReview` with nothing back usually means NAK is in the pool's withdraw queue / unused balance for the router.
 6. Switch the canister to the mops migration chain before first mainnet deploy so later upgrades are safe.
@@ -127,6 +136,9 @@ node scripts/router-admin.mjs health                 # cycles, freezing threshol
 node scripts/router-admin.mjs set max-order-icp 30   # any limit; ICP fields take ICP
 node scripts/router-admin.mjs pause | unpause
 node scripts/router-admin.mjs freezing-days 90
+node scripts/router-admin.mjs fees                   # fee rate, wallet, accrued, paid so far
+node scripts/router-admin.mjs set-fee 1 <principal>  # fee in % (max 5) and the wallet it goes to
+node scripts/router-admin.mjs sweep-fees             # send accrued fees now
 ```
 
 Admin calls accept the configured admin principal or any canister controller.

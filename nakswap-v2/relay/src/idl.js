@@ -87,6 +87,8 @@ export const routerIdl = ({ IDL }) => {
           paused: IDL.Bool,
           activeOrders: IDL.Nat,
           nextOrderId: IDL.Nat,
+          // opt so the relay keeps decoding health() from a router built before the fee
+          feeBps: IDL.Opt(IDL.Nat),
         }),
       ],
       ['query'],

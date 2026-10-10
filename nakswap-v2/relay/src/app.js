@@ -141,6 +141,7 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
         logoUrl: q.logoUrl || null,
         etaMinutes: q.duration,
         icpOut: icpE8s,
+        nakswapFeeIcp: p.nakswapFee,
         nakOut: p.nakOut,
         minNakOut: p.minNakOut,
         impactBps: p.impactBps,
@@ -299,6 +300,7 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
             maxImpactPct: Number(cfg.maxImpactBps) / 100,
             slippagePct: Number(cfg.slippageBps) / 100,
           },
+          fee: { pct: Number(ic.feeBps ?? 100n) / 100, appliesTo: 'ICP received, completed swaps only' },
         });
       }
       if (req.method === 'GET' && url.pathname === '/api/tokens') {

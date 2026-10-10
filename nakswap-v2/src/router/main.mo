@@ -16,6 +16,16 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   let state : Types.RouterState = { var config = init; var nextId = 0; var busy = false };
   let orders = Map.empty<Nat, Types.Order>();
   let active = Set.empty<Nat>();
+  // Added after the first mainnet install: a new stable field, initialised on upgrade.
+  // Default fee 1% to the admin principal; change with setFee.
+  let fees : Types.FeeState = {
+    var bps = 100;
+    var to = state.config.admin;
+    var accrued = 0;
+    var paidTotal = 0;
+    var stuck = 0;
+    var pending = null;
+  };
 
   transient let self = Principal.fromActor(this);
 
@@ -23,8 +33,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   // otherwise block the router forever. Interrupted swaps surface as #needsReview.
   state.busy := false;
 
-  include OrdersApi(state, orders, active, self);
-  include AdminApi(state, orders, active);
+  include OrdersApi(state, fees, orders, active, self);
+  include AdminApi(state, fees, orders, active);
 
   // Background worker: walks active orders, a few per tick. tickSeconds = 0 disables it
   // (tests drive the state machine through `poke` instead).
@@ -32,11 +42,12 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
 
   func tick() : async () {
     var n = 0;
-    for (id in active.values().toArray().values()) {
-      if (n >= maxPerTick) { return };
-      ignore await* Engine.step(state, orders, active, self, id);
+    label walk for (id in active.values().toArray().values()) {
+      if (n >= maxPerTick) { break walk };
+      ignore await* Engine.step(state, fees, orders, active, self, id);
       n += 1;
     };
+    ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
   };
 
   transient let _timer : ?Timer.TimerId = if (tickSeconds > 0) {

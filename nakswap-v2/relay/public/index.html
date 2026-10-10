@@ -205,6 +205,7 @@
     <table class="spec" id="limits">
       <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap<small>Houdiniswap won't quote below this. Some tokens and routes ask for more; the quote tells you.</small></td></tr>
       <tr><th scope="row">Maximum</th><td id="limMax">30 ICP per swap<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small></td></tr>
+      <tr><th scope="row">NAKSwap fee</th><td id="limFee">1% of the ICP<small>Taken from the ICP Houdiniswap delivers, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small></td></tr>
       <tr><th scope="row">Price guard</th><td id="limImpact">5% price impact<small>If a swap would move the NAK price more than this, you get ICP back instead.</small></td></tr>
       <tr><th scope="row">Timing</th><td>5–45 minutes<small>Standard routes take about 5–30 minutes and private routes 15–45. The ICP → NAK step adds about a minute.</small></td></tr>
       <tr><th scope="row">Refunds</th><td>Always to you<small>If the Houdini step fails, your token goes back to your refund address. If the ICP → NAK step can't run, ICP goes to your principal.</small></td></tr>
@@ -391,6 +392,8 @@
       const g = health.guide || {};
       $('limMin').innerHTML = `${usd(g.minUsd || 25)} per swap<small>Houdiniswap won't quote below this. Some tokens and routes ask for more; the quote tells you.</small>`;
       $('limMax').innerHTML = `${fmt(g.maxOrderIcp, 2)} ICP per swap${g.maxUsd ? `, about ${usd(g.maxUsd)}` : ''}<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small>`;
+      const feePct = health.fee ? health.fee.pct : 1;
+      $('limFee').innerHTML = `${fmt(feePct, 2)}% of the ICP<small>Taken from the ICP Houdiniswap delivers, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small>`;
       $('limImpact').innerHTML = `${fmt(health.limits.maxImpactPct, 2)}% price impact<small>If a swap would move the NAK price more than this, you get ICP back instead.</small>`;
       updateAmountHint();
     } catch {
@@ -542,9 +545,11 @@
     $('qIcp').textContent = `≈ ${fmt(e8(r.icpOut), 4)} ICP`;
     $('qIcpSub').textContent = `Houdiniswap ${r.type} route via ${r.provider}, about ${r.etaMinutes} min`;
     $('qNak').textContent = `≈ ${fmt(e8(r.nakOut), 0)} NAK`;
-    $('qNakSub').textContent = `NAKSwap router on ICPSwap, price impact ${pct(r.impactBps)}`;
+    const feePct = health && health.fee ? health.fee.pct : 1;
+    $('qNakSub').textContent = `NAKSwap router on ICPSwap, after the ${fmt(feePct, 2)}% NAKSwap fee, price impact ${pct(r.impactBps)}`;
     $('facts').innerHTML = `
-      <dt>Router fees</dt><dd>0.0003 ICP + 0.02 NAK</dd>
+      <dt>NAKSwap fee (${fmt(feePct, 2)}%)</dt><dd>${r.nakswapFeeIcp != null ? `${fmt(e8(r.nakswapFeeIcp), 4)} ICP` : `${fmt(feePct, 2)}% of ICP`}</dd>
+      <dt>Network fees</dt><dd>0.0003 ICP + 0.02 NAK</dd>
       <dt>If ICP → NAK can't run</dt><dd>ICP refunded to your principal</dd>`;
   }
 

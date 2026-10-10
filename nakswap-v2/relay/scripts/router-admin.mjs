@@ -5,6 +5,9 @@
 //                                       slippage-bps, order-ttl-seconds; ICP fields take ICP)
 //   ... pause | unpause
 //   ... freezing-days 90              (canister freezing threshold, in days of idle burn)
+//   ... fees                          (NAKSwap fee: rate, wallet, accrued, paid so far)
+//   ... set-fee 1 <principal>         (fee in %, max 5; wallet that receives it)
+//   ... sweep-fees                    (send accrued fees now instead of waiting for 0.05 ICP)
 //
 // Use CONTROLLER_SEED=<64 hex> instead of CONTROLLER_PEM if you have the raw seed.
 import crypto from 'node:crypto';
@@ -42,10 +45,28 @@ const healthIdl = ({ IDL }) =>
           paused: IDL.Bool,
           activeOrders: IDL.Nat,
           nextOrderId: IDL.Nat,
+          feeBps: IDL.Opt(IDL.Nat),
         }),
       ],
       ['query'],
     ),
+    feeStatus: IDL.Func(
+      [],
+      [
+        IDL.Record({
+          bps: IDL.Nat,
+          to: IDL.Principal,
+          accrued: IDL.Nat,
+          paidTotal: IDL.Nat,
+          stuck: IDL.Nat,
+          pending: IDL.Opt(IDL.Record({ gross: IDL.Nat, amount: IDL.Nat, to: IDL.Principal, createdAtTime: IDL.Nat64 })),
+          autoSweepAt: IDL.Nat,
+        }),
+      ],
+      ['query'],
+    ),
+    setFee: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Bool], []),
+    sweepFees: IDL.Func([], [IDL.Nat], []),
     setConfig: IDL.Func([routerIdl({ IDL })._fields.find(([n]) => n === 'getConfig')[1].retTypes[0]], [IDL.Bool], []),
     setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
   });
@@ -107,6 +128,17 @@ if (cmd === 'health') {
   console.log(`setConfig ${field}: ${cfg[field]} -> ${next[field]}:`, await router.setConfig(next));
 } else if (cmd === 'pause' || cmd === 'unpause') {
   console.log(cmd, await router.setPaused(cmd === 'pause'));
+} else if (cmd === 'fees') {
+  const f = await router.feeStatus();
+  console.log(show(f));
+  console.log(`fee ${Number(f.bps) / 100}% to ${f.to.toText()}; accrued ${Number(f.accrued) / 1e8} ICP; paid so far ${Number(f.paidTotal) / 1e8} ICP`);
+} else if (cmd === 'set-fee') {
+  const bps = BigInt(Math.round(Number(a) * 100));
+  const to = b ? Principal.fromText(b) : (await router.feeStatus()).to;
+  console.log(`setFee ${Number(bps) / 100}% -> ${to.toText()}:`, await router.setFee(bps, to));
+} else if (cmd === 'sweep-fees') {
+  const sent = await router.sweepFees();
+  console.log('swept', Number(sent) / 1e8, 'ICP');
 } else if (cmd === 'freezing-days') {
   await mgmt.update_settings({
     canister_id: ROUTER,
@@ -115,6 +147,6 @@ if (cmd === 'health') {
   });
   console.log('freezing threshold set to', a, 'days');
 } else {
-  console.log('commands: health | set <field> <value> | pause | unpause | freezing-days <n>');
+  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | set <field> <value> | pause | unpause | freezing-days <n>');
   console.log('fields:', Object.keys(FIELDS).join(', '));
 }

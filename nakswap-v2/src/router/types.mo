@@ -97,6 +97,30 @@ module {
     paused : Bool;
     activeOrders : Nat;
     nextOrderId : Nat;
+    feeBps : Nat;
+  };
+
+  // NAKSwap fee: a share of the ICP each *completed* swap brings in, kept in the router's
+  // main account (`accrued`) and swept to `to`. Refunded orders pay no fee.
+  public type FeeSweep = { gross : Nat; amount : Nat; to : Principal; createdAtTime : Nat64 };
+
+  public type FeeState = {
+    var bps : Nat;
+    var to : Principal;
+    var accrued : Nat; // e8s held in main that belong to the fee wallet
+    var paidTotal : Nat; // e8s delivered to fee wallets so far
+    var stuck : Nat; // e8s whose sweep outcome is unknown (verify on the ledger)
+    var pending : ?FeeSweep;
+  };
+
+  public type FeeStatus = {
+    bps : Nat;
+    to : Principal;
+    accrued : Nat;
+    paidTotal : Nat;
+    stuck : Nat;
+    pending : ?FeeSweep;
+    autoSweepAt : Nat;
   };
 
   public type RouterState = {

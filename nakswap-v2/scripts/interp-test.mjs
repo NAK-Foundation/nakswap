@@ -63,7 +63,7 @@ function inlineModule(src, alias, rel, dirOfImporter) {
     imports.push(`import ${m[1]} "${p}";`);
   }
   let body = msrc.slice(msrc.indexOf('module {') + 'module {'.length, msrc.lastIndexOf('};'));
-  body = body.replace(/\bpublic func\b/g, 'func').replace(/\bpublic type\b/g, 'type');
+  body = body.replace(/\bpublic (func|type|let)\b/g, '$1');
   let out = src.replace(new RegExp(`^import ${alias} "[^"]+";$`, 'm'), '');
   out = out.replace(new RegExp(`\\b${alias}\\.`, 'g'), '');
   out = out.replace(/(actor class [^{]*\{)/, `$1\n  // --- inlined ${alias} ---\n${body}\n`);

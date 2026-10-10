@@ -23,6 +23,13 @@ module {
   let probeE8s : Nat = 1_000_000;
   let bpsDenom : Nat = 10_000;
 
+  // NAKSwap fee: accrued fees are swept to the fee wallet once they reach this (0.05 ICP),
+  // so the 0.0001 ICP ledger fee stays small next to what is sent.
+  public let feeAutoSweepE8s : Nat = 5_000_000;
+  public let feeMaxBps : Nat = 500;
+
+  public func routerFee(fees : Types.FeeState, bal : Nat) : Nat { bal * fees.bps / bpsDenom };
+
   public func minus(a : Nat, b : Nat) : Nat {
     if (a <= b) { 0 } else { (a - b : Int).toNat() };
   };
@@ -58,6 +65,7 @@ module {
   // ---------------------------------------------------------------------------------
   public func step(
     state : Types.RouterState,
+    fees : Types.FeeState,
     orders : Map.Map<Nat, Order>,
     active : Set.Set<Nat>,
     self : Principal,
@@ -94,7 +102,7 @@ module {
 
         state.busy := true;
         try {
-          await* swap(state, active, self, order, bal);
+          await* swap(state, fees, active, self, order, bal);
         } finally {
           state.busy := false;
         };
@@ -138,11 +146,14 @@ module {
   // ---------------------------------------------------------------------------------
   // ICP in the deposit subaccount -> ICPSwap -> NAK in the router's main account.
   // ---------------------------------------------------------------------------------
-  func swap(state : Types.RouterState, active : Set.Set<Nat>, self : Principal, order : Order, bal : Nat) : async* () {
+  func swap(state : Types.RouterState, fees : Types.FeeState, active : Set.Set<Nat>, self : Principal, order : Order, bal : Nat) : async* () {
     let cfg = state.config;
     let fee = cfg.icpFee;
+    // NAKSwap fee stays behind in main when the swap goes through; if the swap fails, it
+    // comes back with the rest of the ICP and is refunded too.
+    let nakswapFee = routerFee(fees, bal);
     // Three ICP ledger fees are spent: sweep to main, approve, transfer_from by the pool.
-    let amountIn = minus(bal, 3 * fee);
+    let amountIn = minus(bal, 3 * fee + nakswapFee);
 
     if (bal < cfg.minOrderIcp or amountIn == 0) {
       refundFromDeposit(order, active, cfg, bal, #tooSmall);
@@ -225,7 +236,7 @@ module {
     switch approved {
       case (#Ok _) {};
       case (#Err _) {
-        await* settleFromMain(active, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, "approve failed");
+        await* settleFromMain(active, fees, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, nakswapFee, "approve failed");
         return;
       };
     };
@@ -250,11 +261,12 @@ module {
     } catch (e) { "pool call rejected: " # e.message() };
 
     // 4. Trust balances, not return values.
-    await* settleFromMain(active, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, swapNote);
+    await* settleFromMain(active, fees, order, cfg, icpL, nakL, main, icpBaseline, nakBaseline, amountIn, nakswapFee, swapNote);
   };
 
   func settleFromMain(
     active : Set.Set<Nat>,
+    fees : Types.FeeState,
     order : Order,
     cfg : Types.Config,
     icpL : Ext.Ledger,
@@ -263,6 +275,7 @@ module {
     icpBaseline : Nat,
     nakBaseline : Nat,
     amountIn : Nat,
+    nakswapFee : Nat,
     note : Text,
   ) : async* () {
     let (icpNow, nakNow) = try {
@@ -275,8 +288,11 @@ module {
     let icpBack = minus(icpNow, icpBaseline);
 
     if (nakGain > cfg.nakFee) {
+      // Swap went through: the fee is the ICP that stayed behind in main.
+      fees.accrued += Nat.min(icpBack, nakswapFee);
       setStatus(order, active, #payoutPending({ icpIn = amountIn; nakAmount = minus(nakGain, cfg.nakFee); createdAtTime = nowNat64() }));
-    } else if (icpBack > cfg.icpFee) {
+    } else if (icpBack > nakswapFee + cfg.icpFee) {
+      // ICP came back from the pool (or never left): refund all of it, fee included.
       setStatus(
         order,
         active,
@@ -290,7 +306,63 @@ module {
     } else {
       // Typical cause: deposit into the pool succeeded but its withdraw leg failed, so the
       // funds sit in the pool as our "unused balance". Needs an operator to withdraw.
+      // The withheld fee (if any) is still in main and is part of what forceRefund returns.
       setStatus(order, active, #needsReview("no NAK and no ICP back after swap: " # note));
+    };
+  };
+
+  // ---------------------------------------------------------------------------------
+  // Fee sweep: accrued ICP in main -> fee wallet. Runs under the lock like every other
+  // movement out of main. One sweep at a time; its amount, wallet and created_at_time are
+  // fixed until it settles, so a retry is deduplicated by the ledger.
+  // ---------------------------------------------------------------------------------
+  public func runFeeSweep(state : Types.RouterState, fees : Types.FeeState, minGross : Nat) : async* Nat {
+    let cfg = state.config;
+    if (state.busy or Cycles.balance() < Guard.criticalCycles) { return 0 };
+    let sweep = switch (fees.pending) {
+      case (?p) { p };
+      case null {
+        if (fees.accrued < minGross or fees.accrued <= cfg.icpFee) { return 0 };
+        let p = { gross = fees.accrued; amount = minus(fees.accrued, cfg.icpFee); to = fees.to; createdAtTime = nowNat64() };
+        fees.pending := ?p;
+        p;
+      };
+    };
+    state.busy := true;
+    let res = try {
+      await icp(cfg).icrc1_transfer({
+        from_subaccount = null;
+        to = { owner = sweep.to; subaccount = null };
+        amount = sweep.amount;
+        fee = ?cfg.icpFee;
+        memo = ?("NAKSWAP-FEE" : Blob);
+        created_at_time = ?sweep.createdAtTime;
+      });
+    } catch (_) {
+      state.busy := false;
+      return 0;
+    };
+    state.busy := false;
+    switch res {
+      case (#Ok _ or #Err(#Duplicate _)) {
+        fees.accrued := minus(fees.accrued, sweep.gross);
+        fees.paidTotal += sweep.amount;
+        fees.pending := null;
+        sweep.amount;
+      };
+      case (#Err(#TooOld)) {
+        // Outcome unknowable now; park it for the admin to check on the ledger.
+        fees.accrued := minus(fees.accrued, sweep.gross);
+        fees.stuck += sweep.gross;
+        fees.pending := null;
+        0;
+      };
+      case (#Err(#InsufficientFunds _ or #BadFee _)) {
+        // Nothing moved; drop this attempt so the next one is rebuilt from current values.
+        fees.pending := null;
+        0;
+      };
+      case (#Err _) { 0 };
     };
   };
 

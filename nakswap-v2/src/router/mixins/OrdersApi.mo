@@ -12,6 +12,7 @@ import Types "../types";
 
 mixin (
   state : Types.RouterState,
+  fees : Types.FeeState,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
   self : Principal,
@@ -58,6 +59,6 @@ mixin (
         if (not isOp and Time.now() - o.lastCheckedAt < 10_000_000_000) { return #tooSoon };
       };
     };
-    await* Engine.step(state, orders, active, self, id);
+    await* Engine.step(state, fees, orders, active, self, id);
   };
 };

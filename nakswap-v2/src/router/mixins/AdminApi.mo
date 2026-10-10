@@ -3,6 +3,7 @@ import Int "mo:core/Int";
 import Iter "mo:core/Iter";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
+import Principal "mo:core/Principal";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Engine "../lib/Engine";
@@ -12,6 +13,7 @@ import Types "../types";
 
 mixin (
   state : Types.RouterState,
+  fees : Types.FeeState,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
 ) {
@@ -94,6 +96,45 @@ mixin (
       paused = state.config.paused;
       activeOrders = active.size();
       nextOrderId = state.nextId;
+      feeBps = fees.bps;
     };
+  };
+
+  // ---- NAKSwap fee ----
+  public query func feeStatus() : async Types.FeeStatus {
+    {
+      bps = fees.bps;
+      to = fees.to;
+      accrued = fees.accrued;
+      paidTotal = fees.paidTotal;
+      stuck = fees.stuck;
+      pending = fees.pending;
+      autoSweepAt = Engine.feeAutoSweepE8s;
+    };
+  };
+
+  // bps of the ICP each completed swap brings in (100 = 1%), capped at 5%. Takes effect for
+  // swaps that start after the call; a change of wallet applies from the next sweep.
+  public shared ({ caller }) func setFee(bps : Nat, to : Principal) : async Bool {
+    if (not Orders.isAdmin(state.config, caller)) { return false };
+    if (bps > Engine.feeMaxBps or to.isAnonymous()) { return false };
+    fees.bps := bps;
+    fees.to := to;
+    true;
+  };
+
+  // Send whatever has accrued now instead of waiting for the automatic threshold.
+  public shared ({ caller }) func sweepFees() : async Nat {
+    if (not Orders.isAdmin(state.config, caller)) { return 0 };
+    await* Engine.runFeeSweep(state, fees, 2 * state.config.icpFee);
+  };
+
+  // After checking the ICP ledger: `stuck` e8s either reached the fee wallet (delivered =
+  // true) or are still in main and go back to `accrued`.
+  public shared ({ caller }) func resolveStuckFees(delivered : Bool) : async Bool {
+    if (not Orders.isAdmin(state.config, caller)) { return false };
+    if (delivered) { fees.paidTotal += fees.stuck } else { fees.accrued += fees.stuck };
+    fees.stuck := 0;
+    true;
   };
 };

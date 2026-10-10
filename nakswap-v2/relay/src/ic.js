@@ -99,10 +99,18 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
     },
 
     // What the router will do with `icpE8s` once it lands: fees, pool output, price impact.
+    // NAKSwap fee in bps of the ICP that reaches the router (100 = 1%). Until health() has
+    // been read, assume the default 1% so minNakOut is never set above what the router gives.
+    get feeBps() {
+      const v = routerHealth?.feeBps;
+      return Array.isArray(v) && v.length ? BigInt(v[0]) : typeof v === 'bigint' ? v : 100n;
+    },
+
     async previewSwap(icpE8s) {
       const fee = cfg.icpFee;
-      const amountIn = icpE8s > 3n * fee ? icpE8s - 3n * fee : 0n;
-      if (amountIn === 0n) return { amountIn, nakOut: 0n, impactBps: 0n };
+      const nakswapFee = (icpE8s * this.feeBps) / BPS;
+      const amountIn = icpE8s > 3n * fee + nakswapFee ? icpE8s - 3n * fee - nakswapFee : 0n;
+      if (amountIn === 0n) return { amountIn, nakswapFee, nakOut: 0n, impactBps: 0n };
       const zeroForOne = cfg.icpIsToken0;
       const [q, m] = await Promise.all([
         pool.quote({ amountIn: amountIn.toString(), zeroForOne, amountOutMinimum: '0' }),
@@ -114,7 +122,7 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
       // Pool withdraw fee + router payout fee both come out of the NAK side.
       const nakOut = q.ok > 2n * cfg.nakFee ? q.ok - 2n * cfg.nakFee : 0n;
       const minNakOut = (q.ok * (BPS - cfg.slippageBps)) / BPS;
-      return { amountIn, nakOut, impactBps, minNakOut: minNakOut > 2n * cfg.nakFee ? minNakOut - 2n * cfg.nakFee : 0n };
+      return { amountIn, nakswapFee, nakOut, impactBps, minNakOut: minNakOut > 2n * cfg.nakFee ? minNakOut - 2n * cfg.nakFee : 0n };
     },
 
     async createOrder({ recipient, refundTo, minNakOut }) {

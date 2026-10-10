@@ -50,10 +50,66 @@ module {
     #GenericError : { error_code : Nat; message : Text };
   };
 
+  public type TransferFromArg = {
+    spender_subaccount : ?Blob;
+    from : Account;
+    to : Account;
+    amount : Nat;
+    fee : ?Nat;
+    memo : ?Blob;
+    created_at_time : ?Nat64;
+  };
+
+  public type TransferFromError = {
+    #BadFee : { expected_fee : Nat };
+    #BadBurn : { min_burn_amount : Nat };
+    #InsufficientFunds : { balance : Nat };
+    #InsufficientAllowance : { allowance : Nat };
+    #TooOld;
+    #CreatedInFuture : { ledger_time : Nat64 };
+    #Duplicate : { duplicate_of : Nat };
+    #TemporarilyUnavailable;
+    #GenericError : { error_code : Nat; message : Text };
+  };
+
   public type Ledger = actor {
     icrc1_balance_of : shared query (Account) -> async Nat;
     icrc1_transfer : shared (TransferArg) -> async { #Ok : Nat; #Err : TransferError };
     icrc2_approve : shared (ApproveArg) -> async { #Ok : Nat; #Err : ApproveError };
+    icrc2_transfer_from : shared (TransferFromArg) -> async { #Ok : Nat; #Err : TransferFromError };
+    icrc2_allowance : shared query ({ account : Account; spender : Account }) -> async { allowance : Nat; expires_at : ?Nat64 };
+  };
+
+  // ---------- NAKSwap swap helper ----------
+
+  public type HelperJob = {
+    from : Account; // the order's deposit account; the router has approved the helper on it
+    pull : Nat; // ICP the helper takes: amountIn + its approve fee + the pool's transfer_from fee
+    amountIn : Nat;
+    minOut : Nat;
+    zeroForOne : Bool;
+    icpFee : Nat;
+    nakFee : Nat;
+    returnTo : Account; // everything the helper holds afterwards goes back here
+  };
+
+  public type HelperResult = {
+    #busy;
+    #notAuthorized;
+    // The helper holds funds from an earlier job: it refuses new work until an admin
+    // returns them (so they can never be credited to someone else's order).
+    #dirty : { icp : Nat; nak : Nat };
+    // `clean`: afterwards the helper holds nothing (beyond fee dust) and nothing of its is
+    // left in the pool. If false the router stops using it until an admin clears it.
+    #done : { pulled : Bool; nakReturned : Nat; icpReturned : Nat; note : Text; clean : Bool };
+  };
+
+  public type Helper = actor {
+    swap : shared HelperJob -> async HelperResult;
+    returnAll : shared (Account, Nat, Nat) -> async { #ok : { nak : Nat; icp : Nat }; #err : Text };
+    routerId : shared query () -> async Principal;
+    poolUnused : shared () -> async { #ok : { icp : Nat; nak : Nat }; #err : Text };
+    withdrawFromPool : shared (Bool, Nat, Nat) -> async { #ok : Nat; #err : Text };
   };
 
   // ---------- ICPSwap SwapPool (only the calls the router uses) ----------

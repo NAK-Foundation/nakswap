@@ -13,7 +13,14 @@
 //   ... pool-unused                   (ICP / NAK ICPSwap holds for the router after a failed withdraw)
 //   ... pool-withdraw icp|nak <amount>  (pull it back into the router's main account)
 //   ... force-refund <id> <icp> main|deposit   (resolve a needs-review order with an ICP refund)
-//   ... force-payout <id> <nak>       (resolve a needs-review order by paying NAK from main)
+//   ... force-payout <id> <nak> [deposit]  (pay NAK to a needs-review order's user, from main or its deposit account)
+//   ... helpers                       (swap helpers and whether each is busy)
+//   ... set-helpers id1,id2,id3       (empty string = no helpers, swap from the router as before)
+//   ... helper-unused <i>             (what ICPSwap holds for helper i)
+//   ... helper-withdraw <i> icp|nak <amount>   (helper i pulls it out of the pool)
+//   ... helper-recover <i> [orderId]  (helper i: pool leftovers + everything it holds -> that order's
+//                                      deposit account, or the router's main account)
+//   ... clear-helper <i>              (put a quarantined helper back into rotation)
 //
 // Use CONTROLLER_SEED=<64 hex> instead of CONTROLLER_PEM if you have the raw seed.
 import crypto from 'node:crypto';
@@ -52,6 +59,7 @@ const healthIdl = ({ IDL }) =>
           activeOrders: IDL.Nat,
           nextOrderId: IDL.Nat,
           feeBps: IDL.Opt(IDL.Nat),
+          helpers: IDL.Opt(IDL.Nat),
         }),
       ],
       ['query'],
@@ -76,6 +84,12 @@ const healthIdl = ({ IDL }) =>
     recoverDeposit: IDL.Func([IDL.Nat, IDL.Principal], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
     poolUnusedBalance: IDL.Func([], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     withdrawFromPool: IDL.Func([IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
+    setHelpers: IDL.Func([IDL.Vec(IDL.Principal)], [IDL.Bool], []),
+    helpers: IDL.Func([], [IDL.Vec(IDL.Record({ helper: IDL.Principal, busy: IDL.Bool, quarantined: IDL.Bool }))], ['query']),
+    clearHelper: IDL.Func([IDL.Nat], [IDL.Bool], []),
+    helperPoolUnused: IDL.Func([IDL.Nat], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
+    helperWithdrawFromPool: IDL.Func([IDL.Nat, IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
+    helperRecover: IDL.Func([IDL.Nat, IDL.Opt(IDL.Nat)], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     setConfig: IDL.Func([routerIdl({ IDL })._fields.find(([n]) => n === 'getConfig')[1].retTypes[0]], [IDL.Bool], []),
     setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
   });
@@ -163,7 +177,20 @@ if (cmd === 'health') {
   const [, , , id, amt, from] = process.argv;
   console.log(show(await router.forceRefund(BigInt(id), BigInt(Math.round(Number(amt) * 1e8)), from === 'deposit')));
 } else if (cmd === 'force-payout') {
-  console.log(show(await router.forcePayout(BigInt(a), BigInt(Math.round(Number(b) * 1e8)))));
+  console.log(show(await router.forcePayout(BigInt(a), BigInt(Math.round(Number(b) * 1e8)), process.argv[5] === 'deposit')));
+} else if (cmd === 'helpers') {
+  console.log(show(await router.helpers()));
+} else if (cmd === 'set-helpers') {
+  const list = (a || '').split(',').map((x) => x.trim()).filter(Boolean).map((x) => Principal.fromText(x));
+  console.log('setHelpers', list.map((p) => p.toText()), await router.setHelpers(list));
+} else if (cmd === 'helper-unused') {
+  console.log(show(await router.helperPoolUnused(BigInt(a))));
+} else if (cmd === 'helper-withdraw') {
+  console.log(show(await router.helperWithdrawFromPool(BigInt(a), b === 'icp', BigInt(Math.round(Number(process.argv[5]) * 1e8)))));
+} else if (cmd === 'helper-recover') {
+  console.log(show(await router.helperRecover(BigInt(a), b ? [BigInt(b)] : [])));
+} else if (cmd === 'clear-helper') {
+  console.log('clearHelper', await router.clearHelper(BigInt(a)));
 } else if (cmd === 'freezing-days') {
   await mgmt.update_settings({
     canister_id: ROUTER,
@@ -172,6 +199,6 @@ if (cmd === 'health') {
   });
   console.log('freezing threshold set to', a, 'days');
 } else {
-  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | set <field> <value> | pause | unpause | freezing-days <n>');
+  console.log('commands: health | fees | set-fee <pct> [principal] | sweep-fees | recover <id> <principal> | orders | pool-unused | pool-withdraw | force-refund | force-payout | helpers | set-helpers | helper-unused | helper-withdraw | helper-recover | clear-helper | set <field> <value> | pause | unpause | freezing-days <n>');
   console.log('fields:', Object.keys(FIELDS).join(', '));
 }

@@ -3,6 +3,7 @@
 import Array "mo:core/Array";
 import Int "mo:core/Int";
 import Iter "mo:core/Iter";
+import List "mo:core/List";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Order "mo:core/Order";
@@ -37,14 +38,30 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   // Added for unlinkable deposit accounts; the secret is fetched from the IC's randomness.
   let privacy : Types.PrivacyState = { var secret = ""; var redactCursor = 0 };
 
+  // Added with the swap helpers: helper list, orders paying out from their own deposit
+  // account, and fees waiting in finished orders' deposit accounts.
+  let exec : Types.ExecState = { var helpers = [] };
+  let payFromSub = Set.empty<Nat>();
+  let subFees = Map.empty<Nat, Types.SubFee>();
+  let quarantined = Set.empty<Principal>();
+
   transient let self = Principal.fromActor(this);
+  transient let rt : Types.Runtime = {
+    exec;
+    payFromSub;
+    subFees;
+    inFlight = Set.empty<Nat>();
+    busyHelpers = Set.empty<Principal>();
+    quarantined;
+    var nextHelper = 0;
+  };
 
   // Runs on install and on every upgrade: a lock left set by an interrupted swap would
   // otherwise block the router forever. Interrupted swaps surface as #needsReview.
   state.busy := false;
 
-  include OrdersApi(state, fees, privacy, orders, active, self);
-  include AdminApi(state, fees, privacy, orders, active, self);
+  include OrdersApi(state, fees, privacy, rt, orders, active, self);
+  include AdminApi(state, fees, privacy, rt, orders, active, self);
 
   // Ingress filter, run before a message is accepted, so rejected calls cost the canister
   // nothing. Every update method is for the relay, the admin or a controller; everyone else
@@ -66,7 +83,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
         case (?o) {
           switch (o.status) {
             case (#payoutPending _ or #refundPending _) {
-              ignore await* Engine.step(state, fees, orders, active, self, id);
+              ignore await* Engine.step(state, fees, rt, orders, active, self, id);
               n += 1;
             };
             case _ {};
@@ -94,15 +111,33 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
       switch (orders.get(id)) { case (?o) { o.lastCheckedAt }; case null { 0 } };
     };
     let ordered = due.sort(func(a : Nat, b : Nat) : Order.Order = Int.compare(checkedAt(a), checkedAt(b)));
+    // Deposit checks run side by side, so with helpers several swaps proceed at once (each
+    // claims a free helper; without helpers they queue on the router's lock as before).
     n := 0;
-    label deposits for (id in ordered.values()) {
-      if (n >= Guard.maxPerTick) { break deposits };
-      ignore await* Engine.step(state, fees, orders, active, self, id);
-      n += 1;
+    if (Engine.usableHelpers(rt) > 0) {
+      let running = List.empty<async ()>();
+      label deposits for (id in ordered.values()) {
+        if (n >= Guard.maxPerTick) { break deposits };
+        running.add(stepTask(id));
+        n += 1;
+      };
+      for (f in running.values()) { try { await f } catch (_) {} };
+    } else {
+      // One at a time through the router's own account, as before helpers.
+      label deposits for (id in ordered.values()) {
+        if (n >= Guard.maxPerTick) { break deposits };
+        ignore await* Engine.step(state, fees, rt, orders, active, self, id);
+        n += 1;
+      };
     };
+    await* Engine.sweepOrderFees(state, fees, rt, orders);
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
     forgetOldHoudiniIds(now);
+  };
+
+  func stepTask(id : Nat) : async () {
+    ignore await* Engine.step(state, fees, rt, orders, active, self, id);
   };
 
   // Walks a few orders per tick; finished orders older than 30 days drop their Houdini id.

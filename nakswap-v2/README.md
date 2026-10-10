@@ -35,6 +35,33 @@ what lets the second leg happen without the user signing anything after Houdini 
 If the swap can't happen safely (too small, too big, price impact, slippage, pool error)
 the ICP goes back to the user's principal instead (`refundTo`, defaults to the recipient).
 
+## Swap helpers (parallel swaps)
+
+Three helper canisters (`src/helper/main.mo`) run the ICPSwap leg, one swap each at a time,
+so up to three swaps proceed at once:
+
+| | |
+|-|-|
+| helper 0 | `boo25-byaaa-aaaab-qhmaa-cai` |
+| helper 1 | `bjp4j-maaaa-aaaab-qhmaq-cai` |
+| helper 2 | `bamxv-2iaaa-aaaab-qhmba-cai` |
+
+Per order: the router approves a free helper on the order's deposit account (5-minute
+allowance), the helper pulls the ICP, approves the pool, swaps, and sends everything it holds
+back to that same deposit account; the router settles from that account alone and pays NAK
+(or refunds ICP) from it. The 1% fee stays there until it's swept to the fee wallet. Nothing
+passes through the router's main account, so swaps can't mix.
+
+Safety: a helper refuses work while it holds anything from an earlier job; if a swap fails
+it pulls its own leftovers out of ICPSwap before returning; any unclear result quarantines
+the helper (out of rotation until an admin returns its funds with `helper-recover` and runs
+`clear-helper`). If every helper is quarantined the router falls back to swapping from its
+own account, one at a time. `setHelpers` is controller-only and accepts only canisters
+built for this router with exactly the router's controllers.
+
+Helpers need cycles like the router: add them to CycleOps (the balance checker is already
+a controller of each).
+
 ## NAKSwap fee
 
 1% of the ICP that Houdini delivers to the deposit account (`setFee`, max 5%). The router swaps

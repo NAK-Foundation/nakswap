@@ -81,7 +81,7 @@ export const routerIdl = ({ IDL }) => {
     // Admin-only (used by scripts/router-admin.mjs, never by the relay itself).
     listOrders: IDL.Func([IDL.Nat, IDL.Nat], [IDL.Vec(OrderView)], ['query']),
     forceRefund: IDL.Func([IDL.Nat, IDL.Nat, IDL.Bool], [IDL.Opt(Status)], []),
-    forcePayout: IDL.Func([IDL.Nat, IDL.Nat], [IDL.Opt(Status)], []),
+    forcePayout: IDL.Func([IDL.Nat, IDL.Nat, IDL.Bool], [IDL.Opt(Status)], []),
     reopen: IDL.Func([IDL.Nat], [IDL.Opt(Status)], []),
     poke: IDL.Func([IDL.Nat], [PokeResult], []),
     getConfig: IDL.Func([], [Config], ['query']),
@@ -97,6 +97,7 @@ export const routerIdl = ({ IDL }) => {
           nextOrderId: IDL.Nat,
           // opt so the relay keeps decoding health() from a router built before the fee
           feeBps: IDL.Opt(IDL.Nat),
+          helpers: IDL.Opt(IDL.Nat),
         }),
       ],
       ['query'],

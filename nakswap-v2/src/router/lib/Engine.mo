@@ -1,9 +1,11 @@
 // The order state machine. Every step that moves funds runs under `state.busy`, so the
 // router's main account is only ever touched by one order at a time and balance deltas
 // around the ICPSwap call can be attributed to that order.
+import Array "mo:core/Array";
 import Cycles "mo:core/Cycles";
 import Error "mo:core/Error";
 import Int "mo:core/Int";
+import Iter "mo:core/Iter";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
@@ -72,6 +74,7 @@ module {
   public func step(
     state : Types.RouterState,
     fees : Types.FeeState,
+    rt : Types.Runtime,
     orders : Map.Map<Nat, Order>,
     active : Set.Set<Nat>,
     self : Principal,
@@ -81,7 +84,12 @@ module {
       case (?o) { o };
       case null { return #notFound };
     };
-    if (state.busy) { return #busy };
+    // One step per order at a time. (The global `busy` lock now only guards the router's
+    // main account: legacy swaps without helpers, payouts/refunds from main, fee sweeps.)
+    if (rt.inFlight.contains(id)) { return #busy };
+    // Restored when the step can't proceed for lack of a free helper / the lock, so the
+    // worker retries on its next tick instead of a minute later.
+    let prevChecked = order.lastCheckedAt;
     order.lastCheckedAt := Time.now();
 
     let cycles = Cycles.balance();
@@ -90,18 +98,20 @@ module {
         // Low on cycles: don't start swaps. ICP that arrives stays in its deposit account
         // and is picked up once the canister is topped up.
         if (cycles < Guard.lowCycles) { return #processed(order.status) };
-        // Read-only check first, outside the lock: most ticks find nothing.
+        // Read-only check first, outside any lock: most ticks find nothing.
         let cfg = state.config;
         let bal = try {
           await icp(cfg).icrc1_balance_of({ owner = self; subaccount = ?order.subaccount });
         } catch (_) { return #processed(order.status) };
 
+        // Re-check after the await: the order may have moved on or been removed meanwhile.
+        switch (orders.get(id), order.status) {
+          case (?_, #awaitingDeposit) {};
+          case _ { return #processed(order.status) };
+        };
+        if (rt.inFlight.contains(id)) { return #busy };
+
         if (bal == 0) {
-          // Re-check after the await: the order may have moved on or been removed meanwhile.
-          switch (orders.get(id), order.status) {
-            case (?_, #awaitingDeposit) {};
-            case _ { return #processed(order.status) };
-          };
           switch (order.houdiniId) {
             case null {
               // Never paired with a Houdini exchange: no one was told to pay, so drop it.
@@ -120,34 +130,331 @@ module {
           return #processed(order.status);
         };
         if (cfg.paused) { return #processed(order.status) };
-        // Re-check after the await: another message may have taken the lock or the order.
-        if (state.busy) { return #busy };
-        switch (order.status) { case (#awaitingDeposit) {}; case _ { return #processed(order.status) } };
 
-        state.busy := true;
-        try {
-          await* swap(state, fees, active, self, order, bal);
-        } finally {
-          state.busy := false;
+        if (usableHelpers(rt) > 0) {
+          // Helper path: no global lock; a free helper does the swap from its own account.
+          let helper = switch (claimHelper(rt)) {
+            case (?h) { h };
+            case null {
+              order.lastCheckedAt := prevChecked;
+              return #busy; // all helpers busy; picked up again on the next tick
+            };
+          };
+          rt.inFlight.add(id);
+          try {
+            await* swapViaHelper(state, fees, rt, active, self, order, bal, helper);
+          } finally {
+            rt.inFlight.remove(id);
+            rt.busyHelpers.remove(helper);
+          };
+        } else {
+          // Legacy path (no helpers, or every helper quarantined): swap from the router's
+          // main account, one at a time.
+          if (state.busy) {
+            order.lastCheckedAt := prevChecked;
+            return #busy;
+          };
+          state.busy := true;
+          rt.inFlight.add(id);
+          try {
+            await* swap(state, fees, active, self, order, bal);
+          } finally {
+            state.busy := false;
+            rt.inFlight.remove(id);
+          };
         };
       };
       case (#payoutPending p) {
         if (cycles < Guard.criticalCycles) { return #processed(order.status) };
-        state.busy := true;
-        try { await* payout(state, active, self, order, p) } finally { state.busy := false };
+        if (rt.payFromSub.contains(id)) {
+          rt.inFlight.add(id);
+          try { await* payout(state, active, rt, self, order, p) } finally { rt.inFlight.remove(id) };
+        } else {
+          if (state.busy) { return #busy };
+          state.busy := true;
+          rt.inFlight.add(id);
+          try { await* payout(state, active, rt, self, order, p) } finally {
+            state.busy := false;
+            rt.inFlight.remove(id);
+          };
+        };
       };
       case (#refundPending r) {
         if (cycles < Guard.criticalCycles) { return #processed(order.status) };
-        state.busy := true;
-        try { await* refund(state, active, self, order, r) } finally { state.busy := false };
+        if (r.fromDeposit) {
+          rt.inFlight.add(id);
+          try { await* refund(state, active, self, order, r) } finally { rt.inFlight.remove(id) };
+        } else {
+          if (state.busy) { return #busy };
+          state.busy := true;
+          rt.inFlight.add(id);
+          try { await* refund(state, active, self, order, r) } finally {
+            state.busy := false;
+            rt.inFlight.remove(id);
+          };
+        };
       };
       case (#swapping _) {
-        // Only reachable if a previous swap message trapped mid-flight.
-        setStatus(order, active, #needsReview("swap interrupted; reconcile pool unused balance and router main account"));
+        // Not in flight, yet marked swapping: a previous swap message trapped mid-flight.
+        setStatus(order, active, #needsReview("swap interrupted; check the helper, the pool's unused balance and the deposit account"));
       };
       case _ {};
     };
     #processed(order.status);
+  };
+
+  public func usableHelpers(rt : Types.Runtime) : Nat {
+    rt.exec.helpers.filter(func(h : Principal) : Bool = not rt.quarantined.contains(h)).size();
+  };
+
+  // Round-robin over free, non-quarantined helpers. No await: check-and-claim is atomic.
+  func claimHelper(rt : Types.Runtime) : ?Principal {
+    let hs = rt.exec.helpers;
+    let n = hs.size();
+    var k = 0;
+    while (k < n) {
+      let h = hs[(rt.nextHelper + k) % n];
+      if (not rt.busyHelpers.contains(h) and not rt.quarantined.contains(h)) {
+        rt.busyHelpers.add(h);
+        rt.nextHelper := (rt.nextHelper + k + 1) % n;
+        return ?h;
+      };
+      k += 1;
+    };
+    null;
+  };
+
+  // ---------------------------------------------------------------------------------
+  // Helper path: the order's deposit account -> helper -> ICPSwap -> back to the order's
+  // deposit account. Everything is settled from that one account, so parallel swaps on
+  // different helpers can't mix.
+  // ---------------------------------------------------------------------------------
+  func swapViaHelper(
+    state : Types.RouterState,
+    fees : Types.FeeState,
+    rt : Types.Runtime,
+    active : Set.Set<Nat>,
+    self : Principal,
+    order : Order,
+    bal : Nat,
+    helper : Principal,
+  ) : async* () {
+    let cfg = state.config;
+    let fee = cfg.icpFee;
+    let nakswapFee = routerFee(fees, bal);
+    // Four ICP ledger fees: approving the helper, its transfer_from, its approval of the
+    // pool, and the pool's transfer_from.
+    let amountIn = minus(bal, 4 * fee + nakswapFee);
+
+    if (bal < cfg.minOrderIcp or amountIn == 0) {
+      refundFromDeposit(order, active, cfg, bal, #tooSmall);
+      return;
+    };
+    if (bal > cfg.maxOrderIcp) {
+      refundFromDeposit(order, active, cfg, bal, #tooLarge);
+      return;
+    };
+
+    let p = pool(cfg);
+    let (quoteOut, probeOut) = try {
+      let q = await p.quote({ amountIn = amountIn.toText(); zeroForOne = cfg.icpIsToken0; amountOutMinimum = "0" });
+      let m = await p.quote({ amountIn = probeE8s.toText(); zeroForOne = cfg.icpIsToken0; amountOutMinimum = "0" });
+      switch (q, m) {
+        case (#ok qo, #ok mo) { (qo, mo) };
+        case _ { return };
+      };
+    } catch (_) { return };
+
+    let impact = impactBps(amountIn, quoteOut, probeOut);
+    if (impact > cfg.maxImpactBps) {
+      refundFromDeposit(order, active, cfg, bal, #priceImpact({ bps = impact }));
+      return;
+    };
+    let slippageFloor = quoteOut * minus(bpsDenom, cfg.slippageBps) / bpsDenom;
+    // What the user must receive, plus the three NAK fees on the way: the pool's withdraw,
+    // the helper's return to the deposit account, and the payout.
+    let minOut = Nat.max(slippageFloor, if (order.minNakOut == 0) { 0 } else { order.minNakOut + 3 * cfg.nakFee });
+
+    let icpL = icp(cfg);
+    let sub = ?order.subaccount;
+    let pull = amountIn + 2 * fee;
+
+    // 1. Let this helper (only) take the job's ICP from the deposit account, for 5 minutes.
+    // Reuse a live approval from an earlier attempt instead of paying for a new one.
+    let existing = try {
+      await icpL.icrc2_allowance({ account = { owner = self; subaccount = sub }; spender = { owner = helper; subaccount = null } });
+    } catch (_) { { allowance = 0; expires_at = null } };
+    let stillValid = existing.allowance >= pull + fee and (switch (existing.expires_at) { case (?t) { t > nowNat64() + 60_000_000_000 }; case null { true } });
+    let approved = if stillValid { #Ok(0) } else try {
+      await icpL.icrc2_approve({
+        from_subaccount = sub;
+        spender = { owner = helper; subaccount = null };
+        amount = pull + fee;
+        expected_allowance = null;
+        expires_at = ?(nowNat64() + 300_000_000_000);
+        fee = ?fee;
+        memo = null;
+        created_at_time = null;
+      });
+    } catch (_) { return };
+    switch approved { case (#Ok _) {}; case (#Err _) { return } };
+
+    // 2. Hand the job to the helper.
+    setStatus(order, active, #swapping({ icpIn = amountIn; startedAt = Time.now() }));
+    let h : Ext.Helper = actor (helper.toText());
+    let result = try {
+      ?(await h.swap({
+        from = { owner = self; subaccount = sub };
+        pull;
+        amountIn;
+        minOut;
+        zeroForOne = cfg.icpIsToken0;
+        icpFee = fee;
+        nakFee = cfg.nakFee;
+        returnTo = { owner = self; subaccount = sub };
+      }));
+    } catch (_) { null };
+
+    let note = switch result {
+      case (?(#done d)) {
+        // A helper that may still hold anything (its own account or the pool) is taken out
+        // of rotation until an admin returns those funds and clears it.
+        if (not d.clean) { rt.quarantined.add(helper) };
+        if (not d.pulled) {
+          // Nothing moved (only the approval fee); try again later.
+          setStatus(order, active, #awaitingDeposit);
+          return;
+        };
+        d.note;
+      };
+      case (?#dirty _ or ?#busy or ?#notAuthorized) {
+        // Not usable right now (or misconfigured): nothing moved; stop using it.
+        rt.quarantined.add(helper);
+        setStatus(order, active, #awaitingDeposit);
+        return;
+      };
+      case null {
+        rt.quarantined.add(helper);
+        // Outcome unknown. If the deposit is untouched (bar the approval fee), retry later.
+        let now = try { await icpL.icrc1_balance_of({ owner = self; subaccount = sub }) } catch (_) { 0 };
+        if (now + fee >= bal) {
+          setStatus(order, active, #awaitingDeposit);
+          return;
+        };
+        "helper call failed after taking the ICP";
+      };
+    };
+
+    // 3. Settle from the deposit account alone.
+    await* settleFromSub(active, fees, rt, order, cfg, self, bal, amountIn, nakswapFee, quoteOut, minOut, helper, note);
+  };
+
+  func settleFromSub(
+    active : Set.Set<Nat>,
+    fees : Types.FeeState,
+    rt : Types.Runtime,
+    order : Order,
+    cfg : Types.Config,
+    self : Principal,
+    deposited : Nat,
+    amountIn : Nat,
+    nakswapFee : Nat,
+    quoteOut : Nat,
+    minOut : Nat,
+    helper : Principal,
+    note : Text,
+  ) : async* () {
+    let acct = { owner = self; subaccount = ?order.subaccount };
+    let (icpHere, nakHere) = try {
+      (await icp(cfg).icrc1_balance_of(acct), await nak(cfg).icrc1_balance_of(acct));
+    } catch (_) {
+      setStatus(order, active, #needsReview("could not read balances after swap: " # note));
+      return;
+    };
+    // Sanity bounds, as on the legacy path: anything more than this swap can explain (e.g.
+    // a delayed pool withdraw that reached the helper) is left for the admin to attribute.
+    if (nakHere > quoteOut + quoteOut / 50 or icpHere > deposited) {
+      setStatus(order, active, #needsReview("balances moved more than this swap explains (NAK " # nakHere.toText() # ", ICP " # icpHere.toText() # "): " # note));
+      return;
+    };
+    if (nakHere > cfg.nakFee) {
+      // Pay out only what a clean swap of this order explains: at least the pool's minimum
+      // (less the two NAK transfers on the way back) and no ICP beyond the fee.
+      if (nakHere + 2 * cfg.nakFee < minOut or icpHere > nakswapFee + cfg.icpFee) {
+        setStatus(order, active, #needsReview("swap result doesn't match this order (NAK " # nakHere.toText() # ", ICP " # icpHere.toText() # "): " # note));
+        return;
+      };
+      rt.payFromSub.add(order.id);
+      let feeHeld = Nat.min(icpHere, nakswapFee);
+      if (feeHeld > cfg.icpFee) { rt.subFees.add(order.id, { amount = feeHeld; to = fees.to; createdAtTime = nowNat64() }) };
+      setStatus(order, active, #payoutPending({ icpIn = amountIn; nakAmount = minus(nakHere, cfg.nakFee); createdAtTime = nowNat64() }));
+    } else if (icpHere > nakswapFee + cfg.icpFee) {
+      // ICP came back (or never left): refund all of it, fee included, from the deposit account.
+      setStatus(
+        order,
+        active,
+        #refundPending({
+          icpAmount = minus(icpHere, cfg.icpFee);
+          fromDeposit = true;
+          reason = #swapFailed(if (note == "") { "no output received" } else { note });
+          createdAtTime = nowNat64();
+        }),
+      );
+    } else {
+      setStatus(order, active, #needsReview("no NAK and no ICP back after swap (helper " # helper.toText() # "): " # note));
+    };
+  };
+
+  // Fees of finished helper-path orders: deposit account -> fee wallet, a few per tick.
+  // The deposit account holds only that order's fee by then, so a retry can never pay twice.
+  public func sweepOrderFees(
+    state : Types.RouterState,
+    fees : Types.FeeState,
+    rt : Types.Runtime,
+    orders : Map.Map<Nat, Order>,
+  ) : async* () {
+    if (Cycles.balance() < Guard.criticalCycles) { return };
+    let cfg = state.config;
+    var n = 0;
+    label each for (id in rt.subFees.keys().toArray().values()) {
+      if (n >= 10) { break each };
+      if (rt.inFlight.contains(id)) { continue each };
+      // Re-read: another sweep may have settled it since this list was taken.
+      let f = switch (rt.subFees.get(id)) { case (?f) { f }; case null { continue each } };
+      let o = switch (orders.get(id)) {
+        case (?o) { o };
+        case null { rt.subFees.remove(id); continue each };
+      };
+      switch (o.status) {
+        // The deposit account holds only this fee (or nothing, if it already left with a
+        // refund), so sending from it can never take anyone else's money.
+        case (#completed _ or #payoutPending _ or #refunded _) {};
+        case _ { continue each };
+      };
+      n += 1;
+      rt.inFlight.add(id);
+      let res = try {
+        await icp(cfg).icrc1_transfer({
+          from_subaccount = ?o.subaccount;
+          to = { owner = f.to; subaccount = null };
+          amount = minus(f.amount, cfg.icpFee);
+          fee = ?cfg.icpFee;
+          memo = ?("NAKSWAP-FEE" : Blob);
+          created_at_time = ?f.createdAtTime;
+        });
+      } catch (_) { #Err(#TemporarilyUnavailable) } finally { rt.inFlight.remove(id) };
+      switch res {
+        case (#Ok _ or #Err(#Duplicate _)) {
+          fees.paidTotal += minus(f.amount, cfg.icpFee);
+          rt.subFees.remove(id);
+        };
+        // Past the dedup window: try again with a fresh timestamp. If an earlier attempt did
+        // go through, the account is empty and the next one fails with InsufficientFunds.
+        case (#Err(#TooOld)) { rt.subFees.add(id, { f with createdAtTime = nowNat64() }) };
+        case (#Err(#InsufficientFunds _ or #BadFee _)) { rt.subFees.remove(id) };
+        case (#Err _) {};
+      };
+    };
   };
 
   func refundFromDeposit(order : Order, active : Set.Set<Nat>, cfg : Types.Config, bal : Nat, reason : Types.RefundReason) {
@@ -414,6 +721,7 @@ module {
   func payout(
     state : Types.RouterState,
     active : Set.Set<Nat>,
+    rt : Types.Runtime,
     self : Principal,
     order : Order,
     p : { icpIn : Nat; nakAmount : Nat; createdAtTime : Nat64 },
@@ -421,7 +729,7 @@ module {
     let cfg = state.config;
     let r = try {
       await nak(cfg).icrc1_transfer({
-        from_subaccount = null;
+        from_subaccount = if (rt.payFromSub.contains(order.id)) { ?order.subaccount } else { null };
         to = { owner = order.recipient; subaccount = null };
         amount = p.nakAmount;
         fee = ?cfg.nakFee;
@@ -431,6 +739,7 @@ module {
     } catch (_) { return };
     switch r {
       case (#Ok block or #Err(#Duplicate { duplicate_of = block })) {
+        rt.payFromSub.remove(order.id);
         setStatus(order, active, #completed({ icpIn = p.icpIn; nakOut = p.nakAmount; block }));
       };
       case (#Err(#TooOld)) {

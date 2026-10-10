@@ -106,10 +106,20 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
       return Array.isArray(v) && v.length ? BigInt(v[0]) : typeof v === 'bigint' ? v : 100n;
     },
 
+    // With swap helpers the router spends one more ICP fee (approving the helper) and one
+    // more NAK fee (the helper returning NAK to the order's account).
+    get usesHelpers() {
+      const v = routerHealth?.helpers;
+      const n = Array.isArray(v) && v.length ? BigInt(v[0]) : typeof v === 'bigint' ? v : 0n;
+      return n > 0n;
+    },
+
     async previewSwap(icpE8s) {
       const fee = cfg.icpFee;
+      const icpFees = this.usesHelpers ? 4n : 3n;
+      const nakFees = this.usesHelpers ? 3n : 2n;
       const nakswapFee = (icpE8s * this.feeBps) / BPS;
-      const amountIn = icpE8s > 3n * fee + nakswapFee ? icpE8s - 3n * fee - nakswapFee : 0n;
+      const amountIn = icpE8s > icpFees * fee + nakswapFee ? icpE8s - icpFees * fee - nakswapFee : 0n;
       if (amountIn === 0n) return { amountIn, nakswapFee, nakOut: 0n, impactBps: 0n };
       const zeroForOne = cfg.icpIsToken0;
       const [q, m] = await Promise.all([
@@ -119,10 +129,11 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
       if (!('ok' in q) || !('ok' in m)) throw new Error('pool quote failed');
       const effective = (q.ok * PROBE_E8S * BPS) / (amountIn * m.ok);
       const impactBps = effective >= BPS ? 0n : BPS - effective;
-      // Pool withdraw fee + router payout fee both come out of the NAK side.
-      const nakOut = q.ok > 2n * cfg.nakFee ? q.ok - 2n * cfg.nakFee : 0n;
+      // Pool withdraw fee + router payout fee (+ helper return fee) come out of the NAK side.
+      const nakCost = nakFees * cfg.nakFee;
+      const nakOut = q.ok > nakCost ? q.ok - nakCost : 0n;
       const minNakOut = (q.ok * (BPS - cfg.slippageBps)) / BPS;
-      return { amountIn, nakswapFee, nakOut, impactBps, minNakOut: minNakOut > 2n * cfg.nakFee ? minNakOut - 2n * cfg.nakFee : 0n };
+      return { amountIn, nakswapFee, nakOut, impactBps, minNakOut: minNakOut > nakCost ? minNakOut - nakCost : 0n };
     },
 
     async createOrder({ recipient, refundTo, minNakOut }) {

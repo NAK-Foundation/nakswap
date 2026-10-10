@@ -99,6 +99,10 @@ actor class MockLedger(symbol : Text, fee : Nat) = this {
     #Ok(b);
   };
 
+  public query func icrc2_allowance(arg : { account : Ext.Account; spender : Ext.Account }) : async { allowance : Nat; expires_at : ?Nat64 } {
+    { allowance = allowances.get(Account.toHex(aid(arg.account)) # Account.toHex(aid(arg.spender))) ?? 0; expires_at = null };
+  };
+
   public type TransferFromError = {
     #BadFee : { expected_fee : Nat };
     #BadBurn : { min_burn_amount : Nat };

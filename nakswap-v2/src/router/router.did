@@ -34,13 +34,18 @@ type Router =
  service {
    activeOrderIds: () -> (vec nat) query;
    attachHoudini: (id: nat, houdiniId: text) -> (bool);
-   createOrder: (args: CreateOrderArgs) -> (Result_2);
+   clearHelper: (i: nat) -> (bool);
+   createOrder: (args: CreateOrderArgs) -> (Result_4);
    feeStatus: () -> (FeeStatus) query;
-   forcePayout: (id: nat, nakAmount: nat) -> (opt Status);
+   forcePayout: (id: nat, nakAmount: nat, fromDeposit: bool) -> (opt Status);
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
    getConfig: () -> (Config) query;
    getOrder: (id: nat) -> (opt OrderView) query;
    health: () -> (Health) query;
+   helperPoolUnused: (i: nat) -> (Result_1);
+   helperRecover: (i: nat, id: opt nat) -> (Result_1);
+   helperWithdrawFromPool: (i: nat, icpToken: bool, amount: nat) -> (Result);
+   helpers: () -> (vec HelperInfo) query;
    listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
    poke: (id: nat) -> (PokeResult);
    poolUnusedBalance: () -> (Result_1);
@@ -49,11 +54,12 @@ type Router =
    resolveStuckFees: (delivered: bool) -> (bool);
    setConfig: (cfg: Config) -> (bool);
    setFee: (bps: nat, to: principal) -> (bool);
+   setHelpers: (list: vec principal) -> (bool);
    setPaused: (paused: bool) -> (bool);
    sweepFees: () -> (nat);
    withdrawFromPool: (icpToken: bool, amount: nat) -> (Result);
  };
-type Result_2 = 
+type Result_4 = 
  variant {
    err: CreateOrderError;
    ok: OrderView;
@@ -99,12 +105,19 @@ type OrderView =
    refundTo: principal;
    status: Status;
  };
+type HelperInfo = 
+ record {
+   busy: bool;
+   helper: principal;
+   quarantined: bool;
+ };
 type Health = 
  record {
    acceptingOrders: bool;
    activeOrders: nat;
    cycles: nat;
    feeBps: nat;
+   helpers: nat;
    lowCyclesThreshold: nat;
    nextOrderId: nat;
    paused: bool;

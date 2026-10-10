@@ -82,6 +82,10 @@ load(path.join(root, 'src'), 'src', (virt, s) => {
   // No raw_rand either: a fixed 32-byte secret stands in for the IC's randomness.
   const fixedSecret = '("' + '\\5a\\c3\\11\\9e'.repeat(8) + '" : Blob)';
   return s
+    // No management canister either: setHelpers' controller check falls back to the admin,
+    // and helper verification (canister_info) is skipped.
+    .replace('if (not caller.isController()) { return false };', 'if (not Orders.isAdmin(state.config, caller)) { return false };')
+    .replace('await* verifyHelpers(list)', 'true')
     .replace(/Cycles\.balance\(\)/g, '(10_000_000_000_000 : Nat)')
     .replace(/caller\.isController\(\)/g, 'false')
     .replace(/await Random\.blob\(\)/g, fixedSecret);

@@ -1,0 +1,59 @@
+type HelperResult = 
+ variant {
+   busy;
+   dirty: record {
+            icp: nat;
+            nak: nat;
+          };
+   done:
+    record {
+      clean: bool;
+      icpReturned: nat;
+      nakReturned: nat;
+      note: text;
+      pulled: bool;
+    };
+   notAuthorized;
+ };
+type HelperJob = 
+ record {
+   amountIn: nat;
+   from: Account;
+   icpFee: nat;
+   minOut: nat;
+   nakFee: nat;
+   pull: nat;
+   returnTo: Account;
+   zeroForOne: bool;
+ };
+type Helper = 
+ service {
+   poolUnused: () -> (variant {
+                        err: text;
+                        ok: record {
+                              icp: nat;
+                              nak: nat;
+                            };
+                      });
+   returnAll: (to: Account, nakFee: nat, icpFee: nat) ->
+    (variant {
+       err: text;
+       ok: record {
+             icp: nat;
+             nak: nat;
+           };
+     });
+   routerId: () -> (principal) query;
+   swap: (job: HelperJob) -> (HelperResult);
+   withdrawFromPool: (icpToken: bool, amount: nat, fee: nat) ->
+    (variant {
+       err: text;
+       ok: nat;
+     });
+ };
+type Account = 
+ record {
+   owner: principal;
+   subaccount: opt blob;
+ };
+service : (router: principal, icpLedger: principal, nakLedger: principal, pool: principal, icpIsToken0: bool) -> Helper

@@ -1,3 +1,6 @@
+import Map "mo:core/Map";
+import Set "mo:core/Set";
+
 module {
 
   public type Config = {
@@ -102,6 +105,7 @@ module {
     activeOrders : Nat;
     nextOrderId : Nat;
     feeBps : Nat;
+    helpers : Nat;
   };
 
   // NAKSwap fee: a share of the ICP each *completed* swap brings in, kept in the router's
@@ -123,6 +127,29 @@ module {
     var secret : Blob;
     var redactCursor : Nat;
   };
+
+  // Swap helpers (added with the helper upgrade). Each helper canister runs one ICPSwap swap at
+  // a time from its own account and returns the results to the order's deposit account.
+  public type ExecState = { var helpers : [Principal] };
+
+  // The NAKSwap fee of a helper-path order sits in that order's deposit account until it is
+  // sent to the fee wallet; created_at_time is fixed so a retry is deduplicated.
+  public type SubFee = { amount : Nat; to : Principal; createdAtTime : Nat64 };
+
+  // Per-run bookkeeping handed to the engine. The Map/Set inside point at stable state;
+  // inFlight / busyHelpers are transient (nothing is in flight across an upgrade, which is
+  // done with the canister stopped).
+  public type Runtime = {
+    exec : ExecState;
+    payFromSub : Set.Set<Nat>; // payouts paid from the order's own deposit account
+    subFees : Map.Map<Nat, SubFee>;
+    inFlight : Set.Set<Nat>; // orders with a step running right now
+    busyHelpers : Set.Set<Principal>;
+    quarantined : Set.Set<Principal>; // helpers that may hold someone's funds; admin clears
+    var nextHelper : Nat;
+  };
+
+  public type HelperInfo = { helper : Principal; busy : Bool; quarantined : Bool };
 
   public type FeeStatus = {
     bps : Nat;

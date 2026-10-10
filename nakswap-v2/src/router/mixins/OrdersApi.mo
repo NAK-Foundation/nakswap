@@ -16,6 +16,7 @@ mixin (
   state : Types.RouterState,
   fees : Types.FeeState,
   privacy : Types.PrivacyState,
+  rt : Types.Runtime,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
   self : Principal,
@@ -82,6 +83,6 @@ mixin (
         case null {};
       };
     };
-    await* Engine.step(state, fees, orders, active, self, id);
+    await* Engine.step(state, fees, rt, orders, active, self, id);
   };
 };

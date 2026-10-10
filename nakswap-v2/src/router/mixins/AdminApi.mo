@@ -21,6 +21,7 @@ mixin (
   state : Types.RouterState,
   fees : Types.FeeState,
   privacy : Types.PrivacyState,
+  rt : Types.Runtime,
   orders : Map.Map<Nat, Types.Order>,
   active : Set.Set<Nat>,
   self : Principal,
@@ -63,7 +64,10 @@ mixin (
     switch (orders.get(id)) {
       case (?o) {
         switch (o.status) {
-          case (#expired or #needsReview _) { Engine.setStatus(o, active, #awaitingDeposit) };
+          case (#expired or #needsReview _) {
+            rt.payFromSub.remove(id);
+            Engine.setStatus(o, active, #awaitingDeposit);
+          };
           case _ {};
         };
         ?o.status;
@@ -82,7 +86,7 @@ mixin (
     let cfg = state.config;
     if (icpAmount <= cfg.icpFee) { return null };
     let o = switch (orders.get(id)) { case (?o) { o }; case null { return null } };
-    if (not refundable(o.status)) { return ?o.status };
+    if (not refundable(o.status) or rt.inFlight.contains(id)) { return ?o.status };
     let ledger : Ext.Ledger = actor (cfg.icpLedger.toText());
     if (fromDeposit) {
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
@@ -92,7 +96,9 @@ mixin (
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = null });
       if (icpAmount + cfg.icpFee + fees.accrued > bal) { return ?o.status };
     };
-    if (not refundable(o.status)) { return ?o.status }; // re-check after the await
+    if (not refundable(o.status) or rt.inFlight.contains(id)) { return ?o.status }; // re-check after the await
+    if (fromDeposit) { rt.subFees.remove(id) }; // whatever is refunded from there is the user's
+    rt.payFromSub.remove(id);
     Engine.setStatus(
       o,
       active,
@@ -117,19 +123,144 @@ mixin (
   // For a #needsReview order whose NAK is in the router's main account (e.g. a payout the
   // ledger kept rejecting, or NAK withdrawn from the pool with withdrawFromPool): pay
   // `nakAmount` to the order's recipient. Capped by main's NAK balance.
-  public shared ({ caller }) func forcePayout(id : Nat, nakAmount : Nat) : async ?Types.Status {
+  // `fromDeposit`: pay from the order's own deposit account (helper path: the helper
+  // returns NAK there) instead of the router's main account.
+  public shared ({ caller }) func forcePayout(id : Nat, nakAmount : Nat, fromDeposit : Bool) : async ?Types.Status {
     if (not Orders.isAdmin(state.config, caller)) { return null };
     let cfg = state.config;
     if (nakAmount == 0) { return null };
     let o = switch (orders.get(id)) { case (?o) { o }; case null { return null } };
     switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
-    if (state.busy) { return ?o.status };
+    if (rt.inFlight.contains(id) or (not fromDeposit and state.busy)) { return ?o.status };
     let ledger : Ext.Ledger = actor (cfg.nakLedger.toText());
-    let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = null });
+    let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = if fromDeposit { ?o.subaccount } else { null } });
     if (nakAmount + cfg.nakFee > bal) { return ?o.status };
     switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
+    if (fromDeposit) { rt.payFromSub.add(id) } else { rt.payFromSub.remove(id) };
     Engine.setStatus(o, active, #payoutPending({ icpIn = 0; nakAmount; createdAtTime = Int.abs(Time.now()).toNat64() }));
     ?o.status;
+  };
+
+  // ---- swap helpers ----
+
+  // Replace the helper list (empty = swap from the router's main account as before).
+  // Refused while any helper is working.
+  // Controllers only (helpers get allowances on every deposit). Each helper must be a NAKSwap
+  // helper built for this router (it reports this router's id) and must have exactly the
+  // same controllers as the router, so a typo or a stranger's canister can't be slipped in.
+  public shared ({ caller }) func setHelpers(list : [Principal]) : async Bool {
+    if (not caller.isController()) { return false };
+    if (rt.busyHelpers.size() > 0 or list.size() > 5) { return false };
+    let cfg = state.config;
+    for (p in list.values()) {
+      if (
+        p.isAnonymous() or p == self or p == cfg.pool or p == cfg.icpLedger or p == cfg.nakLedger
+        or p == cfg.admin or p == fees.to or cfg.operators.any(func(o : Principal) : Bool = o == p)
+      ) { return false };
+    };
+    let seen = Set.empty<Principal>();
+    for (p in list.values()) { if (seen.contains(p)) { return false }; seen.add(p) };
+    if (not (await* verifyHelpers(list))) { return false };
+    if (rt.busyHelpers.size() > 0) { return false }; // re-check after the awaits
+    rt.exec.helpers := list;
+    rt.nextHelper := 0;
+    true;
+  };
+
+  type CanisterInfo = actor {
+    canister_info : shared { canister_id : Principal; num_requested_changes : ?Nat64 } -> async {
+      total_num_changes : Nat64;
+      recent_changes : [Any];
+      module_hash : ?Blob;
+      controllers : [Principal];
+    };
+  };
+
+  func verifyHelpers(list : [Principal]) : async* Bool {
+    let ic : CanisterInfo = actor ("aaaaa-aa");
+    try {
+      let mine = Set.fromIter<Principal>((await ic.canister_info({ canister_id = self; num_requested_changes = null })).controllers.values(), Principal.compare);
+      for (p in list.values()) {
+        let h : Ext.Helper = actor (p.toText());
+        if ((await h.routerId()) != self) { return false };
+        let info = await ic.canister_info({ canister_id = p; num_requested_changes = null });
+        if (info.controllers.size() != mine.size()) { return false };
+        for (c in info.controllers.values()) { if (not mine.contains(c)) { return false } };
+      };
+      true;
+    } catch (_) { false };
+  };
+
+  // Put a quarantined helper back into rotation, after its funds were returned
+  // (helperRecover) and the affected orders resolved.
+  public shared ({ caller }) func clearHelper(i : Nat) : async Bool {
+    if (not Orders.isAdmin(state.config, caller)) { return false };
+    switch (helperAt(i)) {
+      case (?h) { rt.quarantined.remove(h); true };
+      case null { false };
+    };
+  };
+
+  public query ({ caller }) func helpers() : async [Types.HelperInfo] {
+    if (not Orders.isOperator(state.config, caller)) { return [] };
+    rt.exec.helpers.map(func(h : Principal) : Types.HelperInfo = { helper = h; busy = rt.busyHelpers.contains(h); quarantined = rt.quarantined.contains(h) });
+  };
+
+  func helperAt(i : Nat) : ?Principal {
+    if (i < rt.exec.helpers.size()) { ?rt.exec.helpers[i] } else { null };
+  };
+
+  // What ICPSwap holds for helper `i` as unused balance.
+  public shared ({ caller }) func helperPoolUnused(i : Nat) : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    let h = switch (helperAt(i)) { case (?h) { h }; case null { return #err("no such helper") } };
+    let a : Ext.Helper = actor (h.toText());
+    await a.poolUnused();
+  };
+
+  // Helper `i` pulls its unused balance out of the pool (into the helper's own account; then
+  // use helperReturnAll to send it to the order it belongs to).
+  public shared ({ caller }) func helperWithdrawFromPool(i : Nat, icpToken : Bool, amount : Nat) : async Result.Result<Nat, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    let h = switch (helperAt(i)) { case (?h) { h }; case null { return #err("no such helper") } };
+    if (rt.busyHelpers.contains(h)) { return #err("helper is busy; try again in a minute") };
+    rt.busyHelpers.add(h);
+    let cfg = state.config;
+    try {
+      let a : Ext.Helper = actor (h.toText());
+      await a.withdrawFromPool(icpToken, amount, if icpToken { cfg.icpFee } else { cfg.nakFee });
+    } catch (e) { #err(e.message()) } finally { rt.busyHelpers.remove(h) };
+  };
+
+  // Helper `i` pulls anything ICPSwap holds for it and sends everything it holds to order
+  // `id`'s deposit account (then resolve with forcePayout / forceRefund, fromDeposit = true),
+  // or, with no order, to the router's main account.
+  public shared ({ caller }) func helperRecover(i : Nat, id : ?Nat) : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    let h = switch (helperAt(i)) { case (?h) { h }; case null { return #err("no such helper") } };
+    let to : Ext.Account = switch id {
+      case (?oid) {
+        let o = switch (orders.get(oid)) { case (?o) { o }; case null { return #err("no such order") } };
+        if (rt.inFlight.contains(oid)) { return #err("order is busy; try again in a minute") };
+        { owner = self; subaccount = ?o.subaccount };
+      };
+      case null {
+        if (state.busy) { return #err("router is busy; try again in a minute") };
+        { owner = self; subaccount = null };
+      };
+    };
+    if (rt.busyHelpers.contains(h)) { return #err("helper is busy; try again in a minute") };
+    rt.busyHelpers.add(h);
+    let toMain = id == null;
+    if (toMain) { state.busy := true };
+    let cfg = state.config;
+    try {
+      let a : Ext.Helper = actor (h.toText());
+      await a.returnAll(to, cfg.nakFee, cfg.icpFee);
+    } catch (e) { #err(e.message()) } finally {
+      rt.busyHelpers.remove(h);
+      if (toMain) { state.busy := false };
+    };
   };
 
   // What ICPSwap holds for the router as "unused balance" (left behind by a failed withdraw).
@@ -198,6 +329,7 @@ mixin (
       activeOrders = active.size();
       nextOrderId = state.nextId;
       feeBps = fees.bps;
+      helpers = rt.exec.helpers.size();
     };
   };
 
@@ -213,8 +345,12 @@ mixin (
         Account.depositSubaccount(self, privacy.secret, id);
       };
       case (?o) {
+        if (rt.inFlight.contains(id)) { return #err("order is being processed right now") };
         switch (o.status) {
-          case (#completed _ or #refunded _ or #expired or #needsReview _) { o.subaccount };
+          case (#completed _ or #refunded _ or #expired or #needsReview _) {
+            rt.subFees.remove(id); // anything still in there leaves with this recovery
+            o.subaccount;
+          };
           case _ { return #err("order is still being processed") };
         };
       };
@@ -243,7 +379,9 @@ mixin (
     {
       bps = fees.bps;
       to = fees.to;
-      accrued = fees.accrued;
+      // Earned and not yet sent: in the router's main account plus in finished orders'
+      // deposit accounts (helper path).
+      accrued = fees.accrued + rt.subFees.values().foldLeft(0, func(acc : Nat, f : Types.SubFee) : Nat = acc + f.amount);
       paidTotal = fees.paidTotal;
       stuck = fees.stuck;
       pending = fees.pending;
@@ -264,7 +402,10 @@ mixin (
   // Send whatever has accrued now instead of waiting for the automatic threshold.
   public shared ({ caller }) func sweepFees() : async Nat {
     if (not Orders.isAdmin(state.config, caller)) { return 0 };
-    await* Engine.runFeeSweep(state, fees, 2 * state.config.icpFee);
+    let before = fees.paidTotal;
+    ignore await* Engine.runFeeSweep(state, fees, 2 * state.config.icpFee);
+    await* Engine.sweepOrderFees(state, fees, rt, orders);
+    Engine.minus(fees.paidTotal, before);
   };
 
   // After checking the ICP ledger: `stuck` e8s either reached the fee wallet (delivered =

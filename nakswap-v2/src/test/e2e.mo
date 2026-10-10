@@ -18,6 +18,7 @@ import Text "mo:core/Text";
 import Account "../common/Account";
 import MockLedger "../mocks/MockLedger";
 import MockSwapPool "../mocks/MockSwapPool";
+import HelperMod "../helper/main";
 import RouterMod "../router/main";
 import Types "../router/types";
 import Stranger "Stranger";
@@ -275,10 +276,10 @@ actor Test {
     let s6c = await pokeUntilSettled(o6c.id);
     check("needsReview instead of paying the extra (got " # statusTag(s6c) # ")", statusTag(s6c).startsWith(#text "needsReview(balances moved"));
     let mainNak = await nak.icrc1_balance_of(routerMain);
-    check("forcePayout above main's NAK is refused", statusTag((await router.forcePayout(o6c.id, mainNak)) ?? #expired).startsWith(#text "needsReview"));
+    check("forcePayout above main's NAK is refused", statusTag((await router.forcePayout(o6c.id, mainNak, false)) ?? #expired).startsWith(#text "needsReview"));
     let bobNak0 = await nak.icrc1_balance_of({ owner = bob; subaccount = null });
     let owed = mainNak - 500_000 * NAK - nakFee : Nat;
-    check("forcePayout of the order's share accepted", statusTag((await router.forcePayout(o6c.id, owed)) ?? #expired) == "payoutPending");
+    check("forcePayout of the order's share accepted", statusTag((await router.forcePayout(o6c.id, owed, false)) ?? #expired) == "payoutPending");
     check("then completed", statusTag(await pokeUntilSettled(o6c.id)) == "completed");
     check("bob got exactly his share", (await nak.icrc1_balance_of({ owner = bob; subaccount = null })) == bobNak0 + owed);
 
@@ -309,6 +310,122 @@ actor Test {
     check("fee unchanged", (await router.feeStatus()).to == feeWallet);
     let anonRes = await router.createOrder({ recipient = user; refundTo = null; minNakOut = null });
     check("anonymous recipient rejected", switch anonRes { case (#err(#anonymousRecipient)) { true }; case _ { false } });
+
+    // ---- 10. swap helpers: parallel swaps, each settled in its own deposit account ----
+    Debug.print("10. swap helpers");
+    let h0 = await HelperMod.Helper(routerId, icpId, nakId, poolId, false);
+    let h1 = await HelperMod.Helper(routerId, icpId, nakId, poolId, false);
+    let h2 = await HelperMod.Helper(routerId, icpId, nakId, poolId, false);
+    let hIds = [Principal.fromActor(h0), Principal.fromActor(h1), Principal.fromActor(h2)];
+    check("setHelpers rejects duplicates", not (await router.setHelpers([hIds[0], hIds[0]])));
+    check("setHelpers rejects the router itself", not (await router.setHelpers([routerId])));
+    check("setHelpers accepts three helpers", await router.setHelpers(hIds));
+    check("strangers can't use a helper", (await stranger.trySwap(hIds[0])) == #notAuthorized);
+    ignore await router.sweepFees(); // start from a clean fee state
+    let feeWalletBefore = await icp.icrc1_balance_of({ owner = feeWallet; subaccount = null });
+
+    let mainNakBefore = await nak.icrc1_balance_of(routerMain);
+    let mainIcpBefore = await icp.icrc1_balance_of(routerMain);
+
+    // 10a. one swap through a helper
+    let gina = Principal.fromBlob("\0A\01");
+    let o10 = await newOrder(gina, null);
+    await houdiniPays(o10.depositAccountId, 5 * ICP);
+    let in10 = 5 * ICP - 4 * icpFee - 5 * ICP / 100;
+    let q10 = switch (await pool.quote({ amountIn = in10.toText(); zeroForOne = false; amountOutMinimum = "0" })) { case (#ok q) { q }; case (#err _) { 0 } };
+    let s10 = await pokeUntilSettled(o10.id);
+    check("helper swap completed (got " # statusTag(s10) # ")", statusTag(s10) == "completed");
+    let ginaNak = await nak.icrc1_balance_of({ owner = gina; subaccount = null });
+    check("gina got quote minus three NAK fees (" # ginaNak.toText() # " vs " # q10.toText() # ")", ginaNak == q10 - 3 * nakFee);
+    check("router main untouched by the helper path", (await nak.icrc1_balance_of(routerMain)) == mainNakBefore and (await icp.icrc1_balance_of(routerMain)) == mainIcpBefore);
+    check("the 1% fee waits in gina's deposit account", (await icp.icrc1_balance_of({ owner = routerId; subaccount = ?o10.depositSubaccount })) == 5 * ICP / 100);
+    var helpersEmpty = true;
+    for (h in hIds.values()) {
+      if ((await icp.icrc1_balance_of({ owner = h; subaccount = null })) > 0 or (await nak.icrc1_balance_of({ owner = h; subaccount = null })) > 0) { helpersEmpty := false };
+    };
+    check("helpers keep nothing", helpersEmpty);
+
+    // 10b. three swaps at the same time
+    let r1 = Principal.fromBlob("\0A\02");
+    let r2 = Principal.fromBlob("\0A\03");
+    let r3 = Principal.fromBlob("\0A\04");
+    let p1 = await newOrder(r1, null);
+    let p2 = await newOrder(r2, null);
+    let p3 = await newOrder(r3, null);
+    await houdiniPays(p1.depositAccountId, 1 * ICP);
+    await houdiniPays(p2.depositAccountId, 2 * ICP);
+    await houdiniPays(p3.depositAccountId, 3 * ICP);
+    let f1 = router.poke(p1.id);
+    let f2 = router.poke(p2.id);
+    let f3 = router.poke(p3.id);
+    let (a1, a2, a3) = (await f1, await f2, await f3);
+    func tagOf(r : Types.PokeResult) : Text { switch r { case (#processed s) { statusTag(s) }; case (#busy) { "busy" }; case _ { "other" } } };
+    // On the old single-lock path two of these would have answered "busy".
+    check("all three swapped at the same time (" # tagOf(a1) # ", " # tagOf(a2) # ", " # tagOf(a3) # ")",
+      tagOf(a1) == "payoutPending" and tagOf(a2) == "payoutPending" and tagOf(a3) == "payoutPending");
+    ignore await pokeUntilSettled(p1.id);
+    ignore await pokeUntilSettled(p2.id);
+    ignore await pokeUntilSettled(p3.id);
+    let n1 = await nak.icrc1_balance_of({ owner = r1; subaccount = null });
+    let n2 = await nak.icrc1_balance_of({ owner = r2; subaccount = null });
+    let n3 = await nak.icrc1_balance_of({ owner = r3; subaccount = null });
+    check("each got their own NAK (" # n1.toText() # " < " # n2.toText() # " < " # n3.toText() # ")", n1 > 0 and n1 < n2 and n2 < n3);
+    check("payout matches each order's own completion record", switch (await statusOf(p2.id)) { case (#completed c) { c.nakOut == n2 }; case _ { false } });
+    check("no helper left busy", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.busy));
+
+    // 10c. slippage on the helper path: everything comes back from the deposit account
+    let hank = Principal.fromBlob("\0A\05");
+    let o10c = await newOrder(hank, ?(1_000_000_000 * NAK));
+    await houdiniPays(o10c.depositAccountId, 2 * ICP);
+    let s10c = await pokeUntilSettled(o10c.id);
+    check("refunded (got " # statusTag(s10c) # ")", statusTag(s10c) == "refunded");
+    check("hank got 2 ICP minus 7 ledger fees", (await icp.icrc1_balance_of({ owner = hank; subaccount = null })) == 2 * ICP - 7 * icpFee);
+
+    // 10d. the pool keeps the ICP: the helper pulls it back itself and the user is refunded
+    let ivy = Principal.fromBlob("\0A\06");
+    let o10d = await newOrder(ivy, null);
+    await houdiniPays(o10d.depositAccountId, ICP);
+    await pool.setBreakNextSwap(true);
+    let s10d = await pokeUntilSettled(o10d.id);
+    check("refunded without admin help (got " # statusTag(s10d) # ")", statusTag(s10d) == "refunded");
+    let ivyIcp = await icp.icrc1_balance_of({ owner = ivy; subaccount = null });
+    check("ivy got her ICP back (" # ivyIcp.toText() # ")", ivyIcp > ICP - 10 * icpFee and ivyIcp < ICP);
+    check("no helper quarantined by a clean failure", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined));
+
+    // 10e. fees in the deposit accounts are swept to the fee wallet
+    let feesExpected = (5 * ICP / 100 - icpFee) + (1 * ICP / 100 - icpFee) + (2 * ICP / 100 - icpFee) + (3 * ICP / 100 - icpFee);
+    let swept10 = await router.sweepFees();
+    check("swept the four helper-path fees (" # swept10.toText() # " vs " # feesExpected.toText() # ")", swept10 == feesExpected);
+    check("fee wallet received them", (await icp.icrc1_balance_of({ owner = feeWallet; subaccount = null })) == feeWalletBefore + feesExpected);
+    check("nothing left to sweep", (await router.sweepFees()) == 0 and (await router.feeStatus()).accrued == 0);
+
+    // 10f. helpers holding someone else's money are never used; the router falls back
+    Debug.print("10f. dirty helpers");
+    for (h in hIds.values()) { ignore await icp.mint({ owner = h; subaccount = null }, ICP / 10) };
+    let jill = Principal.fromBlob("\0A\07");
+    let o10f = await newOrder(jill, null);
+    await houdiniPays(o10f.depositAccountId, ICP);
+    let s10f = await pokeUntilSettled(o10f.id);
+    check("order still completes (got " # statusTag(s10f) # ")", statusTag(s10f) == "completed");
+    check("jill got NAK", (await nak.icrc1_balance_of({ owner = jill; subaccount = null })) > 0);
+    check("every dirty helper is quarantined", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = i.quarantined));
+    var helperIcpLeft = 0;
+    for (h in hIds.values()) { helperIcpLeft += await icp.icrc1_balance_of({ owner = h; subaccount = null }) };
+    check("their stray ICP was not touched by jill's swap", helperIcpLeft == 3 * (ICP / 10));
+    let mainBefore10f = await icp.icrc1_balance_of(routerMain);
+    var recovered = 0;
+    var k10 = 0;
+    while (k10 < 3) {
+      switch (await router.helperRecover(k10, null)) { case (#ok r) { recovered += r.icp }; case (#err _) {} };
+      check("helper " # k10.toText() # " cleared", await router.clearHelper(k10));
+      k10 += 1;
+    };
+    check("admin recovered the stray ICP to the router", recovered == 3 * (ICP / 10 - icpFee) and (await icp.icrc1_balance_of(routerMain)) == mainBefore10f + recovered);
+    check("helpers back in rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined));
+    let kim = Principal.fromBlob("\0A\08");
+    let o10g = await newOrder(kim, null);
+    await houdiniPays(o10g.depositAccountId, ICP);
+    check("next order goes through a helper again", statusTag(await pokeUntilSettled(o10g.id)) == "completed" and (await nak.icrc1_balance_of(routerMain)) == mainNakBefore);
 
     // ---- 9. hardening ----
     Debug.print("9. hardening");

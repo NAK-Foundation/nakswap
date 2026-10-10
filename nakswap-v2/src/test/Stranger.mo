@@ -2,6 +2,7 @@
 import Principal "mo:core/Principal";
 import Result "mo:core/Result";
 import Types "../router/types";
+import Ext "../common/Ext";
 
 actor class Stranger() {
   type RouterApi = actor {
@@ -10,6 +11,20 @@ actor class Stranger() {
     sweepFees : shared () -> async Nat;
     poke : shared Nat -> async Types.PokeResult;
     getOrder : shared query Nat -> async ?Types.OrderView;
+  };
+
+  public func trySwap(helper : Principal) : async Ext.HelperResult {
+    let h : Ext.Helper = actor (helper.toText());
+    await h.swap({
+      from = { owner = helper; subaccount = null };
+      pull = 1;
+      amountIn = 1;
+      minOut = 0;
+      zeroForOne = false;
+      icpFee = 0;
+      nakFee = 0;
+      returnTo = { owner = helper; subaccount = null };
+    });
   };
 
   public func tryPoke(router : Principal, id : Nat) : async Types.PokeResult {

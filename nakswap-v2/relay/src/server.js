@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { createHoudini } from './houdini.js';
 import { createIc } from './ic.js';
 import { createMockHoudini } from './mockHoudini.js';
+import { createPrices } from './prices.js';
 
 const env = process.env;
 const host = env.IC_HOST || 'https://icp-api.io';
@@ -29,7 +30,8 @@ const houdini =
     ? createHoudini({ apiKey: env.HOUDINI_API_KEY, apiSecret: env.HOUDINI_API_SECRET })
     : createMockHoudini({ payIcp: ic.payIcp, settleAfterMs: Number(env.MOCK_SETTLE_MS || 5_000) });
 
-const handle = createApp({ houdini, ic, log: (...a) => console.log(new Date().toISOString(), ...a) });
+const prices = createPrices();
+const handle = createApp({ houdini, ic, prices, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
 http.createServer(handle).listen(port, () => {
   console.log(`nakswap relay on :${port}`);

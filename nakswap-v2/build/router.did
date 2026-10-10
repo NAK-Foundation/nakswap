@@ -38,6 +38,7 @@ type Router =
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
    getConfig: () -> (Config) query;
    getOrder: (id: nat) -> (opt OrderView) query;
+   health: () -> (Health) query;
    listOrders: (fromId: nat, limit: nat) -> (vec OrderView) query;
    poke: (id: nat) -> (PokeResult);
    reopen: (id: nat) -> (opt Status);
@@ -74,6 +75,15 @@ type OrderView =
    recipient: principal;
    refundTo: principal;
    status: Status;
+ };
+type Health = 
+ record {
+   acceptingOrders: bool;
+   activeOrders: nat;
+   cycles: nat;
+   lowCyclesThreshold: nat;
+   nextOrderId: nat;
+   paused: bool;
  };
 type CreateOrderError = 
  variant {

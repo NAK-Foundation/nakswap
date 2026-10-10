@@ -75,9 +75,11 @@ const coreDir = fs.readdirSync(path.join(root, '.mops')).find((d) => d.startsWit
 load(path.join(root, '.mops', coreDir, 'src'), 'pkg/core');
 mo.usePackage('core', 'pkg/core');
 load(path.join(root, 'src'), 'src', (virt, s) => {
+  // The interpreter has no cycles or controller primitives: stub them (plenty of cycles,
+  // nobody is a controller) so the e2e run exercises the order logic.
   s = flatten(virt, s);
   if (virt === 'src/router/main.mo') s = inlineModule(s, 'Engine', 'lib/Engine', 'router');
-  return s;
+  return s.replace(/Cycles\.balance\(\)/g, '(10_000_000_000_000 : Nat)').replace(/caller\.isController\(\)/g, 'false');
 });
 
 const r = mo.run('src/test/e2e.mo');

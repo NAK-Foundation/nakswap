@@ -77,6 +77,22 @@ export const routerIdl = ({ IDL }) => {
     getOrder: IDL.Func([IDL.Nat], [IDL.Opt(OrderView)], ['query']),
     poke: IDL.Func([IDL.Nat], [PokeResult], []),
     getConfig: IDL.Func([], [Config], ['query']),
+    health: IDL.Func(
+      [],
+      [
+        IDL.Record({
+          cycles: IDL.Nat,
+          lowCyclesThreshold: IDL.Nat,
+          acceptingOrders: IDL.Bool,
+          paused: IDL.Bool,
+          activeOrders: IDL.Nat,
+          nextOrderId: IDL.Nat,
+        }),
+      ],
+      ['query'],
+    ),
+    setConfig: IDL.Func([Config], [IDL.Bool], []),
+    setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
   });
 };
 

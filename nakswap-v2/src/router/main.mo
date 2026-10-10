@@ -19,6 +19,10 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
 
   transient let self = Principal.fromActor(this);
 
+  // Runs on install and on every upgrade: a lock left set by an interrupted swap would
+  // otherwise block the router forever. Interrupted swaps surface as #needsReview.
+  state.busy := false;
+
   include OrdersApi(state, orders, active, self);
   include AdminApi(state, orders, active);
 

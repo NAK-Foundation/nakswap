@@ -60,11 +60,37 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
     return router;
   };
 
+  // Limits can change on the router (setConfig) without a relay restart: re-read them,
+  // plus the router's health (cycles / paused), every minute.
+  let routerHealth = null;
+  async function refresh() {
+    if (!router) return;
+    try {
+      cfg = await router.getConfig();
+      routerHealth = await router.health().catch(() => null);
+      routerError = null;
+    } catch (e) {
+      routerError = e.message;
+    }
+  }
+  if (router) {
+    await refresh();
+    setInterval(refresh, 60_000).unref();
+  }
+
   return {
     principal: identity.getPrincipal().toText(),
-    config: cfg,
+    get config() {
+      return cfg;
+    },
+    get routerHealth() {
+      return routerHealth;
+    },
+    get routerError() {
+      return routerError;
+    },
     routerId: router ? String(routerId) : null,
-    routerError,
+    refresh,
 
     parsePrincipal(text) {
       const p = Principal.fromText(String(text || '').trim());
@@ -97,7 +123,16 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
         refundTo: refundTo ? [refundTo] : [],
         minNakOut: minNakOut ? [minNakOut] : [],
       });
-      if ('err' in r) throw new Error(`router refused order: ${Object.keys(r.err)[0]}`);
+      if ('err' in r) {
+        const why = Object.keys(r.err)[0];
+        const msg =
+          why === 'paused'
+            ? 'Swaps are paused right now (maintenance or a cycles top-up). Nothing was sent; try again shortly.'
+            : why === 'anonymousRecipient'
+              ? 'That principal is the anonymous principal. Paste the principal of a wallet you control.'
+              : `The router refused the order (${why}).`;
+        throw Object.assign(new Error(msg), { status: why === 'paused' ? 503 : 400 });
+      }
       return r.ok;
     },
 

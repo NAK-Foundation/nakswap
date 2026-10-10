@@ -115,3 +115,28 @@ Houdini can "pay", then `cd relay && cp .env.example .env && npm start`.
 4. Router config: `maxOrderIcp` / `maxImpactBps` sized to pool depth; consider raising depth before advertising.
 5. ICPSwap can queue withdrawals; a swap that lands in `needsReview` with nothing back usually means NAK is in the pool's withdraw queue / unused balance for the router.
 6. Switch the canister to the mops migration chain before first mainnet deploy so later upgrades are safe.
+
+## Operating the live router
+
+`relay/scripts/router-admin.mjs`, signed with the controller key (`nakswap-router-controller.pem`):
+
+```bash
+cd relay
+export CONTROLLER_PEM=/path/to/nakswap-router-controller.pem
+node scripts/router-admin.mjs health                 # cycles, freezing threshold, config
+node scripts/router-admin.mjs set max-order-icp 30   # any limit; ICP fields take ICP
+node scripts/router-admin.mjs pause | unpause
+node scripts/router-admin.mjs freezing-days 90
+```
+
+Admin calls accept the configured admin principal or any canister controller.
+
+Cycle safeguards (`src/router/lib/Guard.mo`):
+- below 0.5T cycles the router stops taking orders and starting swaps; ICP that arrives waits in
+  its deposit account, untouched, until the canister is topped up
+- below 0.15T it also holds payouts and refunds
+- the freezing threshold is 90 days of idle burn, so if cycles keep falling the IC freezes the
+  canister with its state intact instead of deleting it. Top up from the NNS app (Canisters tab)
+  or any cycles wallet and it resumes on its own.
+
+Upgrades: `MODE=upgrade CANISTER_ID=bkyfl-uyaaa-aaaab-qhl5q-cai` with `scripts/deploy-router.mjs`.

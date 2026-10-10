@@ -90,6 +90,15 @@ module {
     #notFound;
   };
 
+  public type Health = {
+    cycles : Nat;
+    lowCyclesThreshold : Nat;
+    acceptingOrders : Bool;
+    paused : Bool;
+    activeOrders : Nat;
+    nextOrderId : Nat;
+  };
+
   public type RouterState = {
     var config : Config;
     var nextId : Nat;

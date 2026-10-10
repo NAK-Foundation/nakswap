@@ -83,8 +83,10 @@ function serveStatic(req, res, pathname) {
   return true;
 }
 
-export function createApp({ houdini, ic, log = () => {} }) {
-  const cfg = ic.config;
+// Houdini's floor for standard and private routes, in USD (it rejects quotes below this).
+export const HOUDINI_MIN_USD = 25;
+
+export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
   const allowOrder = limiter(10, 60_000);
   const allowQuote = limiter(60, 60_000);
   let tokenCache = { at: 0, term: null, tokens: [] };
@@ -98,14 +100,17 @@ export function createApp({ houdini, ic, log = () => {} }) {
       name: t.name,
       chain: t.chain,
       chainName: t.chainData?.name || t.network?.name || t.chain,
+      chainType: t.chainData?.type || t.chainData?.kind || null,
       icon: t.icon || null,
       decimals: t.decimals,
+      usd: Number.isFinite(Number(t.price)) ? Number(t.price) : null,
     }));
     if (!key) tokenCache = { at: Date.now(), term: key, tokens: list };
     return list;
   }
 
   async function quote(body, user) {
+    const cfg = ic.config;
     const { fromId, amount, refundAddress } = body;
     if (!fromId || !(Number(amount) > 0)) return [400, { error: 'fromId and a positive amount are required' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
@@ -133,6 +138,7 @@ export function createApp({ houdini, ic, log = () => {} }) {
         minNakOut: p.minNakOut,
         impactBps: p.impactBps,
         requiresRefundAddress: Boolean(q.requiresRefundAddress),
+        amountInUsd: q.amountInUsd ?? null,
         blocked,
       });
     }
@@ -260,7 +266,19 @@ export function createApp({ houdini, ic, log = () => {} }) {
         return res.end();
       }
       if (req.method === 'GET' && url.pathname === '/api/health') {
+        const cfg = ic.config;
+        const rh = ic.routerHealth;
+        const icpUsd = prices.icpUsd ?? null;
+        const maxOrderIcp = Number(cfg.maxOrderIcp) / 1e8;
         return json(res, 200, {
+          acceptingOrders: Boolean(ic.routerId) && (rh ? rh.acceptingOrders : !cfg.paused),
+          prices: { icpUsd, nakUsd: prices.nakUsd ?? null },
+          guide: {
+            minUsd: HOUDINI_MIN_USD,
+            maxOrderIcp,
+            maxUsd: icpUsd ? Math.floor(maxOrderIcp * icpUsd) : null,
+            minOrderIcp: Number(cfg.minOrderIcp) / 1e8,
+          },
           ok: true,
           houdini: houdini.mode,
           houdiniReady: houdini.ready !== false,
@@ -270,7 +288,7 @@ export function createApp({ houdini, ic, log = () => {} }) {
           operator: ic.principal,
           limits: {
             minOrderIcp: Number(cfg.minOrderIcp) / 1e8,
-            maxOrderIcp: Number(cfg.maxOrderIcp) / 1e8,
+            maxOrderIcp,
             maxImpactPct: Number(cfg.maxImpactBps) / 100,
             slippagePct: Number(cfg.slippageBps) / 100,
           },

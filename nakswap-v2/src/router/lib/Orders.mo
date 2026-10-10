@@ -36,6 +36,12 @@ module {
   };
 
   public func isOperator(cfg : Types.Config, caller : Principal) : Bool {
-    caller == cfg.admin or cfg.operators.any(func p = p == caller);
+    isAdmin(cfg, caller) or cfg.operators.any(func p = p == caller);
+  };
+
+  // The configured admin, or any controller of this canister (so limits can be changed
+  // from a CLI key even when the admin is an Internet Identity / NNS principal).
+  public func isAdmin(cfg : Types.Config, caller : Principal) : Bool {
+    caller == cfg.admin or caller.isController();
   };
 };

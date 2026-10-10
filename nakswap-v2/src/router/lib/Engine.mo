@@ -1,6 +1,7 @@
 // The order state machine. Every step that moves funds runs under `state.busy`, so the
 // router's main account is only ever touched by one order at a time and balance deltas
 // around the ICPSwap call can be attributed to that order.
+import Cycles "mo:core/Cycles";
 import Error "mo:core/Error";
 import Int "mo:core/Int";
 import Map "mo:core/Map";
@@ -9,6 +10,7 @@ import Principal "mo:core/Principal";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Account "../../common/Account";
+import Guard "Guard";
 import Ext "../../common/Ext";
 import Types "../types";
 
@@ -68,8 +70,12 @@ module {
     if (state.busy) { return #busy };
     order.lastCheckedAt := Time.now();
 
+    let cycles = Cycles.balance();
     switch (order.status) {
       case (#awaitingDeposit) {
+        // Low on cycles: don't start swaps. ICP that arrives stays in its deposit account
+        // and is picked up once the canister is topped up.
+        if (cycles < Guard.lowCycles) { return #processed(order.status) };
         // Read-only check first, outside the lock: most ticks find nothing.
         let cfg = state.config;
         let bal = try {
@@ -94,10 +100,12 @@ module {
         };
       };
       case (#payoutPending p) {
+        if (cycles < Guard.criticalCycles) { return #processed(order.status) };
         state.busy := true;
         try { await* payout(state, active, order, p) } finally { state.busy := false };
       };
       case (#refundPending r) {
+        if (cycles < Guard.criticalCycles) { return #processed(order.status) };
         state.busy := true;
         try { await* refund(state, active, order, r) } finally { state.busy := false };
       };

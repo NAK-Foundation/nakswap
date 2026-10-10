@@ -1,3 +1,4 @@
+import Cycles "mo:core/Cycles";
 import Int "mo:core/Int";
 import Iter "mo:core/Iter";
 import Map "mo:core/Map";
@@ -5,6 +6,7 @@ import Nat "mo:core/Nat";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Engine "../lib/Engine";
+import Guard "../lib/Guard";
 import Orders "../lib/Orders";
 import Types "../types";
 
@@ -17,20 +19,20 @@ mixin (
   public query func getConfig() : async Types.Config { state.config };
 
   public shared ({ caller }) func setConfig(cfg : Types.Config) : async Bool {
-    if (caller != state.config.admin) { return false };
+    if (not Orders.isAdmin(state.config, caller)) { return false };
     state.config := cfg;
     true;
   };
 
   public shared ({ caller }) func setPaused(paused : Bool) : async Bool {
-    if (caller != state.config.admin) { return false };
+    if (not Orders.isAdmin(state.config, caller)) { return false };
     state.config := { state.config with paused };
     true;
   };
 
   // Put an expired / needs-review order back in the queue, e.g. Houdini paid after the TTL.
   public shared ({ caller }) func reopen(id : Nat) : async ?Types.Status {
-    if (caller != state.config.admin) { return null };
+    if (not Orders.isAdmin(state.config, caller)) { return null };
     switch (orders.get(id)) {
       case (?o) {
         switch (o.status) {
@@ -46,7 +48,7 @@ mixin (
   // Manual resolution for #needsReview: send `icpAmount` back to the order's refundTo,
   // from its deposit subaccount or from the router's main account.
   public shared ({ caller }) func forceRefund(id : Nat, icpAmount : Nat, fromDeposit : Bool) : async ?Types.Status {
-    if (caller != state.config.admin) { return null };
+    if (not Orders.isAdmin(state.config, caller)) { return null };
     switch (orders.get(id)) {
       case (?o) {
         switch (o.status) {
@@ -81,4 +83,17 @@ mixin (
   };
 
   public query func activeOrderIds() : async [Nat] { active.values().toArray() };
+
+  // Public health check: the relay reads it to explain why swaps are paused.
+  public query func health() : async Types.Health {
+    let cycles = Cycles.balance();
+    {
+      cycles;
+      lowCyclesThreshold = Guard.lowCycles;
+      acceptingOrders = not state.config.paused and cycles >= Guard.lowCycles;
+      paused = state.config.paused;
+      activeOrders = active.size();
+      nextOrderId = state.nextId;
+    };
+  };
 };

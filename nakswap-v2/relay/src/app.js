@@ -103,7 +103,7 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
       chainType: t.chainData?.type || t.chainData?.kind || null,
       icon: t.icon || null,
       decimals: t.decimals,
-      usd: Number.isFinite(Number(t.price)) ? Number(t.price) : null,
+      usd: Number(t.price) > 0 ? Number(t.price) : null,
     }));
     if (!key) tokenCache = { at: Date.now(), term: key, tokens: list };
     return list;
@@ -114,10 +114,17 @@ export function createApp({ houdini, ic, prices = {}, log = () => {} }) {
     const { fromId, amount, refundAddress } = body;
     if (!fromId || !(Number(amount) > 0)) return [400, { error: 'fromId and a positive amount are required' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
-    const quotes = await houdini.quotesToIcp({ fromId, amount, refundAddress: refundAddress || undefined, user });
+    const all = await houdini.quotesToIcp({ fromId, amount, refundAddress: refundAddress || undefined, user });
+    // Houdini can return dozens of routes; show the best Standard and the best Private one.
+    const best = new Map();
+    for (const q of all) {
+      if (q.error || q.filtered || !(Number(q.amountOut) > 0)) continue;
+      const cur = best.get(q.type);
+      if (!cur || Number(q.amountOut) > Number(cur.amountOut)) best.set(q.type, q);
+    }
+    const quotes = [...best.values()];
     const routes = [];
     for (const q of quotes) {
-      if (q.error || q.filtered) continue;
       const icpE8s = BigInt(Math.floor(Number(q.amountOut) * 1e8));
       if (icpE8s <= 0n) continue;
       const p = await ic.previewSwap(icpE8s);

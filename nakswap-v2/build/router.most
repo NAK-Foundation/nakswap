@@ -1,0 +1,134 @@
+// Version: 1.0.0
+type AuditRequest__1040107917 =
+  {at : Int; by : Principal; id : Nat; note : Text};
+type Config__223335084 =
+  {
+    admin : Principal;
+    icpFee : Nat;
+    icpIsToken0 : Bool;
+    icpLedger : Principal;
+    maxImpactBps : Nat;
+    maxOrderIcp : Nat;
+    minOrderIcp : Nat;
+    nakFee : Nat;
+    nakLedger : Principal;
+    operators : [Principal];
+    orderTtlSeconds : Nat;
+    paused : Bool;
+    pool : Principal;
+    slippageBps : Nat
+  };
+type Data__44217153<K, V> = {var count : Nat__227979830; kvs : [var ?(K, V)]};
+type Data__846125122<T> = {var count : Nat__227979830; elements : [var ?T]};
+type FeeSweep__366981523 =
+  {amount : Nat; createdAtTime : Nat64; gross : Nat; to : Principal};
+type Internal__23036296<T> =
+  {children : [var ?Node__620761243<T>]; data : Data__846125122<T>};
+type Internal__283199666<K, V> =
+  {children : [var ?Node__204828119<K, V>]; data : Data__44217153<K, V>};
+type Leaf__598469445<K, V> = {data : Data__44217153<K, V>};
+type Leaf__948582970<T> = {data : Data__846125122<T>};
+type Map__230067015<K, V> = Map__405889023<K, V>;
+type Map__405889023<K, V> = Map__603270868<K, V>;
+type Map__603270868<K, V> =
+  {var root : Node__204828119<K, V>; var size : Nat__227979830};
+type Nat__227979830 = Nat__920180692;
+type Nat__920180692 = Nat;
+type Node__204828119<K, V> =
+  {#internal : Internal__283199666<K, V>; #leaf : Leaf__598469445<K, V>};
+type Node__620761243<T> =
+  {#internal : Internal__23036296<T>; #leaf : Leaf__948582970<T>};
+type Order__515695644 =
+  {
+    createdAt : Int;
+    depositAccountId : Blob;
+    var houdiniId : ?Text;
+    id : Nat;
+    var lastCheckedAt : Int;
+    minNakOut : Nat;
+    recipient : Principal;
+    refundTo : Principal;
+    var status : Status__224633450;
+    subaccount : Blob
+  };
+type RefundReason__830297428 =
+  {
+    #admin;
+    #priceImpact : {bps : Nat};
+    #swapFailed : Text;
+    #tooLarge;
+    #tooSmall
+  };
+type Set__1053317950<T> =
+  {var root : Node__620761243<T>; var size : Nat__227979830};
+type Set__70493310<T> = Set__1053317950<T>;
+type Status__224633450 =
+  {
+    #awaitingDeposit;
+    #completed : {block : Nat; icpIn : Nat; nakOut : Nat};
+    #expired;
+    #needsReview : Text;
+    #payoutPending : {createdAtTime : Nat64; icpIn : Nat; nakAmount : Nat};
+    #refundPending :
+      {
+        createdAtTime : Nat64;
+        fromDeposit : Bool;
+        icpAmount : Nat;
+        reason : RefundReason__830297428
+      };
+    #refunded :
+      {block : Nat; icpAmount : Nat; reason : RefundReason__830297428};
+    #swapping : {icpIn : Nat; startedAt : Int}
+  };
+type SubFee__219914591 =
+  {amount : Nat; createdAtTime : Nat64; to : Principal};
+actor {
+  stable active :
+    {var root : Node__620761243<Nat>; var size : Nat__227979830};
+  stable exec : {var helpers : [Principal]};
+  stable fees :
+    {
+      var accrued : Nat;
+      var bps : Nat;
+      var paidTotal : Nat;
+      var pending : ?FeeSweep__366981523;
+      var stuck : Nat;
+      var to : Principal
+    };
+  stable helperOrders :
+    {var root : Node__204828119<Principal, Nat>; var size : Nat__227979830};
+  stable jobFees :
+    {var root : Node__204828119<Nat, Nat>; var size : Nat__227979830};
+  stable lateWatch :
+    {var root : Node__204828119<Nat, Int>; var size : Nat__227979830};
+  stable ops :
+    {
+      audits : Map__230067015<Nat, AuditRequest__1040107917>;
+      guardians : Set__70493310<Principal>;
+      var nextAudit : Nat
+    };
+  stable orders :
+    {
+      var root : Node__204828119<Nat, Order__515695644>;
+      var size : Nat__227979830
+    };
+  stable payFromSub :
+    {var root : Node__620761243<Nat>; var size : Nat__227979830};
+  stable privacy : {var redactCursor : Nat; var secret : Blob};
+  stable quarantined :
+    {var root : Node__620761243<Principal>; var size : Nat__227979830};
+  stable state :
+    {var busy : Bool; var config : Config__223335084; var nextId : Nat};
+  stable stats :
+    {
+      var icpSwapped : Nat;
+      var nakDelivered : Nat;
+      var ready : Bool;
+      var swaps : Nat
+    };
+  stable subFees :
+    {
+      var root : Node__204828119<Nat, SubFee__219914591>;
+      var size : Nat__227979830
+    }
+};

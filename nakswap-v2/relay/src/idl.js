@@ -32,6 +32,7 @@ export const routerIdl = ({ IDL }) => {
     minNakOut: IDL.Nat,
     createdAt: IDL.Int,
     depositAccountId: IDL.Text,
+    depositSubaccount: IDL.Vec(IDL.Nat8),
     houdiniId: IDL.Opt(IDL.Text),
     status: Status,
   });
@@ -105,6 +106,12 @@ export const routerIdl = ({ IDL }) => {
     ),
     setConfig: IDL.Func([Config], [IDL.Bool], []),
     setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
+    // Public totals for the stats strip (completed swaps only).
+    publicStats: IDL.Func(
+      [],
+      [IDL.Record({ swaps: IDL.Nat, icpSwapped: IDL.Nat, nakDelivered: IDL.Nat, lateWatched: IDL.Nat })],
+      ['query'],
+    ),
   });
 };
 
@@ -121,8 +128,8 @@ export const poolIdl = ({ IDL }) => {
   });
 };
 
-// Legacy ICP ledger `transfer` (by account identifier). Only used by the mock Houdini to
-// play an exchange paying out ICP on a local replica.
+// ICP ledger: `icrc1_balance_of` (to see a direct ICP payment land in an order's deposit
+// account) and the legacy `transfer`, used only by the mock Houdini on a local replica.
 export const icpLedgerIdl = ({ IDL }) => {
   const Tokens = IDL.Record({ e8s: IDL.Nat64 });
   const TransferError = IDL.Variant({
@@ -133,6 +140,7 @@ export const icpLedgerIdl = ({ IDL }) => {
     TxDuplicate: IDL.Record({ duplicate_of: IDL.Nat64 }),
   });
   return IDL.Service({
+    icrc1_balance_of: IDL.Func([IDL.Record({ owner: IDL.Principal, subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)) })], [IDL.Nat], ['query']),
     transfer: IDL.Func(
       [
         IDL.Record({

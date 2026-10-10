@@ -148,6 +148,9 @@ module {
     quarantined : Set.Set<Principal>; // helpers that may hold someone's funds; admin clears
     helperOrders : Map.Map<Principal, Nat>; // quarantined helper -> the order whose funds it holds
     jobFees : Map.Map<Nat, Nat>; // order -> its 1% fee, while its funds are with a helper
+    // Expired orders still watched for a late deposit: order -> next check time (ns).
+    lateWatch : Map.Map<Nat, Int>;
+    stats : Stats;
     var nextHelper : Nat;
   };
 
@@ -187,6 +190,9 @@ module {
     pending : ?FeeSweep;
     autoSweepAt : Nat;
   };
+
+  // Running totals of completed swaps, for the public stats strip (no per-call scan).
+  public type Stats = { var swaps : Nat; var icpSwapped : Nat; var nakDelivered : Nat; var ready : Bool };
 
   public type RouterState = {
     var config : Config;

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NAKSwap · New Age Kapital</title>
-<meta name="description" content="Swap almost any token into NAK. Houdiniswap converts it to ICP, then the NAKSwap router buys NAK on ICPSwap and sends it to your ICP principal.">
+<meta name="description" content="Swap almost any token into NAK, or pay with ICP directly. Houdiniswap converts your token to ICP, then the NAKSwap router buys NAK on ICPSwap and sends it to your ICP principal.">
 <link rel="icon" href="/favicon.png">
 <style>
   /* Fonts are served from this site (OFL-licensed copies), so no visitor IP goes to Google. */
@@ -66,6 +66,7 @@
   /* Phone: intro, swap card, then the details. Desktop: intro + details left, card right. */
   main { max-width: 1280px; margin: 0 auto; padding: 48px 16px 72px; display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "intro" "swap" "details"; }
   .intro { grid-area: intro; } .swap { grid-area: swap; } .details { grid-area: details; }
+  #orderView { scroll-margin-top: 88px; }
   @media (min-width: 1000px) {
     main { grid-template-columns: minmax(0, 1fr) minmax(0, 620px); grid-template-rows: auto 1fr; grid-template-areas: "intro swap" "details swap"; column-gap: 64px; row-gap: 0; align-items: start; }
   }
@@ -81,6 +82,14 @@
   .spec th { width: 34%; font-size: 12px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; color: var(--nak-text-muted); }
   .spec td { font-size: 15px; }
   .spec td small { display: block; color: var(--nak-text-muted); font-size: 13px; margin-top: 2px; }
+  /* Totals of completed swaps, read from the router. Same frame as the spec tables. */
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--nak-border); margin: 0 0 28px; max-width: 46rem; }
+  .stats[hidden] { display: none; }
+  .stats div { padding: 12px 14px; border-left: 1px solid var(--nak-border); min-width: 0; }
+  .stats div:first-child { border-left: 0; }
+  .stats b { display: block; font-family: var(--font-display); font-weight: 500; font-size: 24px; letter-spacing: .02em; line-height: 1.2; }
+  .stats span { font-size: 12px; color: var(--nak-text-muted); }
+  @media (max-width: 420px) { .stats div { padding: 10px; } .stats b { font-size: 19px; } }
   h2 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; margin: 0 0 12px; }
 
   /* ---------- swap card ---------- */
@@ -167,6 +176,9 @@
   .titem:hover, .titem:focus-visible { background: var(--nak-surface-hi); }
   .titem .ticon { width: 28px; height: 28px; }
   .titem .nm { font-size: 13px; color: var(--nak-text-muted); }
+  .titem.pinned { border-bottom: 1px solid var(--nak-border); border-radius: 0; margin-bottom: 4px; padding-bottom: 12px; }
+  .suggest { margin-left: 6px; padding: 1px 8px; font: 500 12px var(--font-body); color: var(--nak-text); background: none; border: 1px solid var(--nak-border-strong); border-radius: var(--radius); cursor: pointer; }
+  .suggest:hover { border-color: var(--nak-text-muted); }
 
   footer { max-width: 1280px; margin: 0 auto; padding: 24px 16px 40px; border-top: 1px solid var(--nak-border); font-size: 13px; color: var(--nak-text-muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 </style>
@@ -192,7 +204,12 @@
   <section class="intro" aria-labelledby="pageTitle">
     <p class="eyebrow">Acquire</p>
     <h1 id="pageTitle">Swap any token into NAK</h1>
-    <p class="lede">Send BTC, ETH, SOL, USDT and hundreds more. Houdiniswap turns it into ICP, then the NAKSwap router buys NAK on ICPSwap and delivers it to your ICP principal. No account, no wallet connection.</p>
+    <p class="lede">Send BTC, ETH, SOL, USDT and hundreds more. Houdiniswap turns it into ICP, then the NAKSwap router buys NAK on ICPSwap and delivers it to your ICP principal. Holding ICP already? Pay with it directly. No account, no wallet connection.</p>
+    <div class="stats" id="stats" hidden aria-label="NAKSwap totals">
+      <div><b id="stNak">—</b><span>NAK delivered</span></div>
+      <div><b id="stSwaps">—</b><span>Swaps completed</span></div>
+      <div><b id="stIcp">—</b><span>ICP swapped</span></div>
+    </div>
   </section>
 
   <!-- ===== details: route spec + limits guide ===== -->
@@ -200,18 +217,18 @@
 
     <table class="spec">
       <tr><th scope="row">Pair</th><td>NAK / ICP</td></tr>
-      <tr><th scope="row">Bridge</th><td>Houdiniswap<small>Your token → ICP</small></td></tr>
+      <tr><th scope="row">Bridge</th><td>Houdiniswap<small>Your token → ICP. Paying with ICP skips this step.</small></td></tr>
       <tr><th scope="row">Venue</th><td>ICPSwap, via the NAKSwap router<small>ICP → NAK, sent to your principal</small></td></tr>
       <tr><th scope="row">Router</th><td class="mono" style="font-size:13px">bkyfl-uyaaa-aaaab-qhl5q-cai</td></tr>
     </table>
 
     <h2>Before you swap</h2>
     <table class="spec" id="limits">
-      <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap<small>Houdiniswap won't quote below this. Private routes usually need more, often $40 or so; the quote tells you.</small></td></tr>
+      <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap, or 0.1 ICP<small>Houdiniswap won't quote below $25. Private routes usually need more, often $40 or so; the quote tells you. Paying with ICP directly starts at 0.1 ICP.</small></td></tr>
       <tr><th scope="row">Maximum</th><td id="limMax">30 ICP per swap<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small></td></tr>
-      <tr><th scope="row">NAKSwap fee</th><td id="limFee">1% of the ICP<small>Taken from the ICP Houdiniswap delivers, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small></td></tr>
-      <tr><th scope="row">Price guard</th><td id="limImpact">5% price impact<small>If a swap would move the NAK price more than this, you get ICP back instead.</small></td></tr>
-      <tr><th scope="row">Timing</th><td>5–45 minutes<small>Standard routes take about 5–30 minutes and private routes 15–45. The ICP → NAK step adds about a minute.</small></td></tr>
+      <tr><th scope="row">NAKSwap fee</th><td id="limFee">1% of the ICP<small>Taken from the ICP that reaches the router, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small></td></tr>
+      <tr><th scope="row">Price guard</th><td id="limImpact">3.5% price impact<small>Quotes that would move the NAK price more than this are refused, with a smaller amount suggested. If the price moves past 5% by the time your ICP arrives, you get ICP back instead.</small></td></tr>
+      <tr><th scope="row">Timing</th><td>1–45 minutes<small>Paying with ICP: about a minute after your ICP arrives. Houdiniswap standard routes take about 5–30 minutes and private routes 15–45.</small></td></tr>
       <tr><th scope="row">Refunds</th><td>Always to you<small>If the Houdini step fails, your token goes back to your refund address. If the ICP → NAK step can't run, ICP goes to your principal.</small></td></tr>
     </table>
   </section>
@@ -261,7 +278,7 @@
           <div class="help">Use the principal of a wallet you control (NNS, Plug or Oisy). Exchange accounts can't receive NAK. For more privacy, use a fresh wallet: NAK payouts are public on the ICP ledger like any transfer.</div>
         </div>
 
-        <div class="block">
+        <div class="block" id="refundBlock">
           <label class="label" for="refund" id="refundLabel">Refund address</label>
           <div class="box"><input id="refund" class="addr-in" placeholder="Choose a token first" autocomplete="off" spellcheck="false" disabled></div>
           <div class="help" id="refundHelp">If Houdiniswap can't finish its step, it sends your tokens back to this address. It has to be a wallet on the same chain as the token you send.</div>
@@ -288,12 +305,18 @@
         <div class="deposit" id="depositBox" hidden>
           <span class="label">Send exactly</span>
           <div class="amt" id="depAmt"></div>
-          <span class="label" style="margin-top:12px">To this address</span>
+          <span class="label" style="margin-top:12px" id="depToLabel">To this address</span>
           <div class="addr" id="depAddr"></div>
           <div class="row">
-            <button class="btn copy" type="button" data-copy="depAddr">Copy address</button>
+            <button class="btn copy" type="button" data-copy="depAddr" id="depCopy">Copy address</button>
             <span class="muted" style="font-size:13px" id="depExpires"></span>
           </div>
+          <div id="depIcrcRow" hidden style="margin-top:14px">
+            <span class="label">Or, from Plug or Oisy (ICRC-1 account)</span>
+            <div class="addr" id="depIcrc"></div>
+            <button class="btn copy" type="button" data-copy="depIcrc">Copy account</button>
+          </div>
+          <div class="help" id="depNote" hidden></div>
           <div id="depTagRow" hidden style="margin-top:12px">
             <span class="label">Memo / tag (required)</span>
             <div class="addr" id="depTag"></div>
@@ -301,7 +324,7 @@
           </div>
         </div>
         <div class="rail" id="orderRail">
-          <div class="stop" id="s1"><div class="big">Deposit with Houdiniswap</div><div class="sub" id="s1sub"></div></div>
+          <div class="stop" id="s1"><div class="big" id="s1big">Deposit with Houdiniswap</div><div class="sub" id="s1sub"></div></div>
           <div class="stop" id="s2"><div class="big">ICP to the NAKSwap router</div><div class="sub" id="s2sub"></div></div>
           <div class="stop" id="s3"><div class="big">NAK to your principal</div><div class="sub" id="s3sub"></div></div>
         </div>
@@ -376,6 +399,7 @@
     return FORMATS[c] || (c === 'xlm' ? FORMATS.xlm : null);
   }
 
+  const DIRECT_ICP = { id: 'icp-direct', symbol: 'ICP', name: 'Internet Computer', chain: 'icp', chainName: 'Internet Computer', direct: true };
   let lastUnavailable = [];
   let health = null, token = null, routes = [], chosen = null, quotedAt = 0, quoteSeq = 0, pollTimer = null, lastQuoteErr = '', quoting = false;
 
@@ -395,15 +419,29 @@
       $('setupNotice').hidden = !msgs.length;
       $('setupNotice').textContent = msgs.join(' ');
       const g = health.guide || {};
-      $('limMin').innerHTML = `${usd(g.minUsd || 25)} per swap<small>Houdiniswap won't quote below this. Private routes usually need more, often $40 or so; the quote tells you.</small>`;
+      $('limMin').innerHTML = `${usd(g.minUsd || 25)} per swap, or ${fmt(g.minOrderIcp ?? 0.1, 4)} ICP<small>Houdiniswap won't quote below ${usd(g.minUsd || 25)}. Private routes usually need more, often $40 or so; the quote tells you. Paying with ICP directly starts at ${fmt(g.minOrderIcp ?? 0.1, 4)} ICP.</small>`;
       $('limMax').innerHTML = `${fmt(g.maxOrderIcp, 2)} ICP per swap${g.maxUsd ? `, about ${usd(g.maxUsd)}` : ''}<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small>`;
       const feePct = health.fee ? health.fee.pct : 1;
-      $('limFee').innerHTML = `${fmt(feePct, 2)}% of the ICP<small>Taken from the ICP Houdiniswap delivers, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small>`;
-      $('limImpact').innerHTML = `${fmt(health.limits.maxImpactPct, 2)}% price impact<small>If a swap would move the NAK price more than this, you get ICP back instead.</small>`;
+      $('limFee').innerHTML = `${fmt(feePct, 2)}% of the ICP<small>Taken from the ICP that reaches the router, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small>`;
+      const capPct = health.limits.quoteImpactPct ?? health.limits.maxImpactPct;
+      $('limImpact').innerHTML = `${fmt(capPct, 2)}% price impact<small>Quotes that would move the NAK price more than this are refused, with a smaller amount suggested. If the price moves past ${fmt(health.limits.maxImpactPct, 2)}% by the time your ICP arrives, you get ICP back instead.</small>`;
       updateAmountHint();
     } catch {
       $('statusText').textContent = 'Offline';
     }
+  }
+
+  // ---------- stats strip ----------
+  const compact = (n, d = 1) => Number(n).toLocaleString(undefined, { notation: 'compact', maximumFractionDigits: d });
+  async function loadStats() {
+    try {
+      const st = await api('/api/stats');
+      if (!(st.swaps > 0)) return;
+      $('stNak').textContent = compact(st.nakDelivered);
+      $('stSwaps').textContent = Number(st.swaps).toLocaleString();
+      $('stIcp').textContent = compact(st.icpSwapped, st.icpSwapped < 1000 ? 2 : 1);
+      $('stats').hidden = false;
+    } catch {}
   }
 
   // ---------- token picker ----------
@@ -415,9 +453,18 @@
     try {
       const { tokens } = await api(`/api/tokens?term=${encodeURIComponent(term || '')}`);
       if (seq !== tokenSeq) return; // a newer search has started
+      const icpTok = tokens.find((t) => t.symbol === 'ICP' && t.chain === 'icp');
       const usable = tokens.filter((t) => !(t.symbol === 'ICP' && t.chain === 'icp'));
+      // ICP itself goes straight to the router (no Houdiniswap leg), pinned first.
+      if (health?.routes?.icp !== false && (!term || /^(icp|internet)/i.test(term))) {
+        usable.unshift({ ...DIRECT_ICP, icon: icpTok?.icon || null, usd: icpTok?.usd ?? health?.prices?.icpUsd ?? null });
+      }
       if (!usable.length) { list.innerHTML = '<div class="muted" style="padding:12px">No tokens match. Try a ticker like USDT, BTC or SOL.</div>'; return; }
-      list.innerHTML = usable.map((t, i) => `
+      list.innerHTML = usable.map((t, i) => t.direct ? `
+        <button class="titem pinned" type="button" data-i="${i}">
+          <span class="ticon">${iconHtml(t)}</span>
+          <span><b>ICP</b> <span class="chain-tag">pay directly</span><br><span class="nm">Send ICP from any wallet or exchange. No Houdiniswap step; NAK in about a minute.</span></span>
+        </button>` : `
         <button class="titem" type="button" data-i="${i}">
           <span class="ticon">${iconHtml(t)}</span>
           <span><b>${esc(t.symbol)}</b> <span class="chain-tag">on ${esc(t.chainName)}</span><br><span class="nm">${esc(t.name)}</span></span>
@@ -428,12 +475,20 @@
     }
   }
   function pickToken(t) {
-    const chainChanged = !token || token.chain !== t.chain;
+    const chainChanged = !token || token.chain !== t.chain || Boolean(token.direct) !== Boolean(t.direct);
     token = t;
     $('tokenIcon').innerHTML = iconHtml(t);
     $('tokenSym').textContent = t.symbol;
-    $('tokenChain').textContent = t.chainName;
+    $('tokenChain').textContent = t.direct ? 'pay directly' : t.chainName;
     store.set('nak.token', t);
+    // Paying with ICP: no Houdiniswap step, so no refund address (ICP refunds go to your principal).
+    $('refundBlock').hidden = Boolean(t.direct);
+    if (t.direct) {
+      if (chainChanged) $('refund').value = '';
+      updateAmountHint();
+      scheduleQuote(0);
+      return;
+    }
     // Refund address follows the token's chain.
     const f = chainFormat(t);
     $('refund').disabled = false;
@@ -458,6 +513,17 @@
   }
   function updateAmountHint() {
     const el = $('amountHint');
+    if (token?.direct) {
+      const lim = health?.limits || { minOrderIcp: 0.1, maxOrderIcp: 50 };
+      const a = Number($('amount').value.replace(',', '.'));
+      const icpUsd = health?.prices?.icpUsd;
+      el.className = 'hint';
+      const range = `Min ${fmt(lim.minOrderIcp, 4)} ICP, max ${fmt(lim.maxOrderIcp, 2)} ICP per swap.`;
+      if (!(a > 0)) { el.textContent = range; return; }
+      if (a < lim.minOrderIcp || a > lim.maxOrderIcp) { el.className = 'hint warn'; el.textContent = range; return; }
+      el.textContent = `${icpUsd ? `≈ ${usd(a * icpUsd)}. ` : ''}${range}`;
+      return;
+    }
     const g = health?.guide || { minUsd: 25 };
     const v = amountUsd();
     el.className = 'hint';
@@ -506,6 +572,23 @@
     quoting = true;
     $('receiveHint').textContent = 'Getting a quote…';
     $('swapBtn').textContent = 'Getting quote…'; $('swapBtn').disabled = true;
+    if (token.direct) {
+      try {
+        const q = await api('/api/quote-icp', { amount });
+        if (seq !== quoteSeq) return;
+        routes = []; lastUnavailable = []; quotedAt = q.quotedAt;
+        chosen = { ...q, type: 'icp' };
+        renderDirectQuote(amount, q);
+      } catch (e) {
+        if (seq !== quoteSeq) return;
+        clearQuote(e.message);
+        lastQuoteErr = e.message;
+      }
+      if (seq === quoteSeq) quoting = false;
+      updateAmountHint();
+      updateSwapBtn();
+      return;
+    }
     try {
       const refund = $('refund').value.trim();
       const q = await api('/api/quote', { fromId: token.id, amount, refundAddress: refund && checkRefund() ? refund : undefined });
@@ -550,7 +633,7 @@
     $('routes').querySelectorAll('.route:not([disabled])').forEach((b) => b.addEventListener('click', () => { chosen = routes[Number(b.dataset.i)]; store.set('nak.route', chosen.type); renderQuote(amount); updateAmountHint(); updateSwapBtn(); }));
     const r = chosen || routes[0];
     $('receiveAmt').textContent = `${fmt(e8(r.nakOut), 0)}`;
-    $('receiveHint').textContent = r.blocked ? `Can't swap this amount: ${r.blocked}.` : `Guaranteed at least ${fmt(e8(r.guaranteedNak ?? r.minNakOut), 0)} NAK, or your ICP back`;
+    setReceiveHint(r);
     $('qSend').textContent = `${fmt(amount, 8)} ${token.symbol}`;
     $('qSendSub').textContent = `You send on ${token.chainName}`;
     $('qIcp').textContent = `≈ ${fmt(e8(r.icpOut), 4)} ICP`;
@@ -560,7 +643,41 @@
     $('qNakSub').textContent = `NAKSwap router on ICPSwap, after the ${fmt(feePct, 2)}% NAKSwap fee, price impact ${pct(r.impactBps)}`;
     $('facts').innerHTML = `
       <dt>NAKSwap fee (${fmt(feePct, 2)}%)</dt><dd>${r.nakswapFeeIcp != null ? `${fmt(e8(r.nakswapFeeIcp), 4)} ICP` : `${fmt(feePct, 2)}% of ICP`}</dd>
-      <dt>Network fees</dt><dd>0.0003 ICP + 0.02 NAK</dd>
+      <dt>Network fees</dt><dd>0.0004 ICP + 0.03 NAK</dd>
+      <dt>If ICP → NAK can't run</dt><dd>ICP refunded to your principal</dd>`;
+  }
+
+  function setReceiveHint(r) {
+    const el = $('receiveHint');
+    if (!r.blocked) { el.textContent = `Guaranteed at least ${fmt(e8(r.guaranteedNak ?? r.minNakOut), 0)} NAK, or your ICP back`; return; }
+    el.innerHTML = `Can't swap this amount: ${esc(r.blocked)}.` +
+      (r.suggestAmount ? ` <button class="suggest" type="button" data-amount="${esc(r.suggestAmount)}">Use ${esc(r.suggestAmount)}${token?.direct ? ' ICP' : ''}</button>` : '');
+  }
+  $('receiveHint').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-amount]');
+    if (!b) return;
+    $('amount').value = b.dataset.amount;
+    chosen = null; updateAmountHint(); scheduleQuote(0);
+  });
+
+  function renderDirectQuote(amount, q) {
+    $('routingBlock').hidden = true;
+    // Over a limit there's no swap to describe: just the reason and a suggested amount.
+    $('legs').hidden = Boolean(q.blocked);
+    const feePct = health && health.fee ? health.fee.pct : 1;
+    const win = q.windowMinutes || health?.limits?.directWindowMinutes || 45;
+    $('receiveAmt').textContent = q.blocked ? '—' : `${fmt(e8(q.nakOut), 0)}`;
+    setReceiveHint(q);
+    $('qSend').textContent = `${fmt(amount, 8)} ICP`;
+    $('qSendSub').textContent = 'You send from any ICP wallet (NNS, Plug, Oisy) or an exchange';
+    $('qIcp').textContent = 'NAKSwap router buys NAK on ICPSwap';
+    $('qIcpSub').textContent = `After the ${fmt(feePct, 2)}% NAKSwap fee, price impact ${pct(q.impactBps)}`;
+    $('qNak').textContent = q.blocked ? 'NAK to your principal' : `≈ ${fmt(e8(q.nakOut), 0)} NAK`;
+    $('qNakSub').textContent = 'Sent to your principal about a minute after your ICP arrives';
+    $('facts').innerHTML = `
+      <dt>NAKSwap fee (${fmt(feePct, 2)}%)</dt><dd>${fmt(e8(q.nakswapFeeIcp), 4)} ICP</dd>
+      <dt>Network fees</dt><dd>0.0004 ICP + 0.03 NAK</dd>
+      <dt>Time to send</dt><dd>${win >= 60 ? `${fmt(win / 60, 1)} hours` : `${win} min`}</dd>
       <dt>If ICP → NAK can't run</dt><dd>ICP refunded to your principal</dd>`;
   }
 
@@ -573,10 +690,12 @@
     else if (lastQuoteErr) { label = 'Adjust the amount'; ok = false; }
     else if (quoting) { label = 'Getting quote…'; ok = false; }
     else if (!chosen) { label = routes.length ? 'No available route' : 'No route for this token'; ok = false; }
+    else if (chosen.blocked) { label = 'Adjust the amount'; ok = false; }
     else if (!looksLikePrincipal(rec)) { label = 'Enter your ICP principal'; ok = false; }
+    else if (token.direct) { label = 'Get deposit account'; }
     else if (chosen.requiresRefundAddress && !$('refund').value.trim()) { label = 'This route needs a refund address'; ok = false; }
     else if ($('refund').value.trim() && !checkRefund()) { label = 'Check the refund address'; ok = false; }
-    else if (health && (!health.routerReady || !health.acceptingOrders)) { label = 'Swaps are paused'; ok = false; }
+    if (ok && health && (!health.routerReady || !health.acceptingOrders)) { label = 'Swaps are paused'; ok = false; }
     btn.textContent = label; btn.disabled = !ok;
   }
 
@@ -587,12 +706,12 @@
     try {
       if (Date.now() - quotedAt > 45_000) {
         await getQuote();
-        if (!chosen) throw new Error('The quote expired and no route is available now. Try again.');
+        if (!chosen || chosen.blocked) throw new Error('The quote expired and no route is available now. Try again.');
       }
       const r = await api('/api/orders', {
         quoteId: chosen.quoteId,
         recipient: $('recipient').value.trim(),
-        refundAddress: $('refund').value.trim() || undefined,
+        refundAddress: token.direct ? undefined : $('refund').value.trim() || undefined,
       });
       const code = `${r.orderId}-${r.orderKey}`;
       store.set(`nak.order.${code}`, r);
@@ -621,6 +740,8 @@
   }
   async function showOrder(code) {
     $('swapView').hidden = true; $('orderView').hidden = false;
+    // On phones the card sits below the intro: bring it into view.
+    if (window.innerWidth < 1000) $('orderView').scrollIntoView({ block: 'start' });
     $('orderTitle').textContent = `#${code.split('-')[0]}`;
     $('orderCode').textContent = code;
     const saved = store.get(`nak.order.${code}`, null);
@@ -632,7 +753,14 @@
   function renderDeposit(send) {
     if (!send || !send.to) { $('depositBox').hidden = true; return; }
     $('depositBox').hidden = false;
-    $('depAmt').textContent = `${send.amount} ${send.symbol}`;
+    const isIcp = send.chain === 'icp' && send.symbol === 'ICP';
+    $('depAmt').textContent = send.amount ? `${send.amount} ${send.symbol}` : `ICP, between ${fmt(health?.limits?.minOrderIcp ?? 0.1, 4)} and ${fmt(health?.limits?.maxOrderIcp ?? 50, 2)}`;
+    $('depToLabel').textContent = isIcp ? 'To this ICP account ID (NNS app, exchanges)' : 'To this address';
+    $('depCopy').textContent = isIcp ? 'Copy account ID' : 'Copy address';
+    $('depIcrcRow').hidden = !(isIcp && send.icrc);
+    $('depIcrc').textContent = send.icrc || '';
+    $('depNote').hidden = !isIcp;
+    $('depNote').textContent = isIcp ? 'Both point to the same deposit account, which belongs to this order only. No memo needed. Send the amount in one transfer: the swap starts as soon as it lands, and ICP sent after that isn’t part of this swap (support can return it). If about 6% less than the amount shown arrives, it can’t reach your guaranteed minimum and the ICP is refunded to your principal.' : '';
     $('depAddr').textContent = send.to;
     $('depTagRow').hidden = !send.tag;
     $('depTag').textContent = send.tag || '';
@@ -646,9 +774,22 @@
       const o = await api(`/api/orders/${id}`, undefined, { 'x-order-key': key || '' });
       $('orderErr').textContent = '';
       const h = o.houdini;
+      const direct = o.route === 'icp';
+      $('s1big').textContent = direct ? 'ICP sent to your deposit account' : 'Deposit with Houdiniswap';
+      const received = direct && o.receivedIcp != null ? BigInt(o.receivedIcp) : 0n;
+      // "arrived": the ICP is with the router (Houdiniswap finished, or a direct payment landed).
+      const arrived = direct ? received > 0n || !['awaitingDeposit', 'expired'].includes(o.stage) : h?.status === 4;
       if (h?.send) renderDeposit(h.send);
-      const hs = h?.status;
-      if (!h) setStop('s1', 'active', 'Linking the Houdiniswap order…');
+      const hs = direct ? (arrived ? 4 : 0) : h?.status;
+      if (direct) {
+        const saved = store.get(`nak.order.${code}`, null);
+        if (!arrived && o.stage === 'awaitingDeposit') renderDeposit({ ...(saved?.send || {}), symbol: 'ICP', chain: 'icp', to: o.deposit.to, icrc: o.deposit.icrc, expires: o.deposit.expires });
+        else $('depositBox').hidden = true;
+        if (arrived) setStop('s1', 'done', received > 0n ? `Received ${fmt(e8(received), 8)} ICP` : 'ICP received');
+        else if (o.stage === 'expired') setStop('s1', 'fail', 'No ICP arrived in time. Start a new swap instead of sending to this order. If you already sent ICP, the router keeps checking for 3 days and swaps or refunds it automatically, usually within about 10 minutes.');
+        else setStop('s1', 'active', 'Waiting for your ICP. The swap starts within about a minute of it arriving.');
+      }
+      else if (!h) setStop('s1', 'active', 'Linking the Houdiniswap order…');
       else if (h.error) setStop('s1', 'active', `Houdiniswap status unavailable: ${h.error}`);
       else if (hs === 4) { setStop('s1', 'done', `Houdiniswap finished: ${fmt(h.outAmount, 4)} ICP sent to the router`); $('depositBox').hidden = true; }
       else if ([5, 6, 7, 8].includes(hs)) setStop('s1', 'fail', `Houdiniswap: ${h.statusLabel}${h.actionRequired ? '. Contact Houdiniswap support with the order id below.' : ''}`);
@@ -665,20 +806,21 @@
         setStop('s3', null, 'Not sent');
         clearInterval(pollTimer);
       } else if (o.stage === 'expired') {
-        setStop('s2', 'fail', 'No ICP arrived before the order expired. If you already sent funds, contact support with this order number.');
+        if (direct && arrived) setStop('s2', 'active', 'Your ICP arrived after the window. The router swaps or refunds it automatically, usually within about 10 minutes.');
+        else setStop('s2', direct ? null : 'fail', direct ? '' : 'No ICP arrived before the order expired. If Houdiniswap delivers late (within 3 days), the router swaps or refunds it automatically, usually within about 10 minutes.');
         setStop('s3', null, '');
       } else if (o.stage === 'needsReview') {
         setStop('s2', 'fail', `Held for manual review. Your funds are safe; contact support with this order number.`);
         setStop('s3', null, '');
       } else {
-        const t = { awaitingDeposit: hs === 4 ? 'ICP received, starting the swap' : 'Waiting for ICP from Houdiniswap', swapping: 'Swapping ICP for NAK on ICPSwap', payoutPending: 'Swap done, sending NAK', refundPending: 'Returning ICP to your principal' }[o.stage] || o.stage;
+        const t = { awaitingDeposit: hs === 4 ? 'ICP received, starting the swap' : direct ? '' : 'Waiting for ICP from Houdiniswap', swapping: 'Swapping ICP for NAK on ICPSwap', payoutPending: 'Swap done, sending NAK', refundPending: 'Returning ICP to your principal' }[o.stage] ?? o.stage;
         setStop('s2', o.stage !== 'awaitingDeposit' || hs === 4 ? 'active' : null, t);
         setStop('s3', o.stage === 'payoutPending' ? 'active' : null, o.stage === 'payoutPending' ? `Sending ${fmt(e8(d.nakAmount), 2)} NAK to ${o.recipient}` : '');
         $('orderRail').className = hs === 4 ? 'rail lit-1' : 'rail';
       }
       $('orderFacts').innerHTML = `
         <dt>NAK recipient</dt><dd style="word-break:break-all;max-width:260px">${esc(o.recipient)}</dd>
-        <dt>Houdiniswap order</dt><dd>${esc(h?.houdiniId || '—')}</dd>
+        ${direct ? '<dt>Route</dt><dd>Paid with ICP directly</dd>' : `<dt>Houdiniswap order</dt><dd>${esc(h?.houdiniId || '—')}</dd>`}
         <dt>Router deposit account</dt><dd style="word-break:break-all;max-width:260px">${esc(o.icpDepositAccount)}</dd>`;
     } catch (e) {
       $('orderErr').textContent = e.message;
@@ -721,6 +863,8 @@
   if (savedToken) pickToken(savedToken);
   loadHealth().then(updateSwapBtn);
   setInterval(loadHealth, 60_000);
+  loadStats();
+  setInterval(loadStats, 5 * 60_000);
   route();
 })();
 </script>

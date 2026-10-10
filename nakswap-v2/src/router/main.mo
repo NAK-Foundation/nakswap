@@ -48,6 +48,9 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   let jobFees = Map.empty<Nat, Nat>();
   // Admin dashboard: guardians and audit requests.
   let ops : Types.OpsState = { guardians = Set.empty<Principal>(); audits = Map.empty<Nat, Types.AuditRequest>(); var nextAudit = 0 };
+  // Expired orders watched for a late deposit (order -> next check time).
+  let lateWatch = Map.empty<Nat, Int>();
+  let stats : Types.Stats = { var swaps = 0; var icpSwapped = 0; var nakDelivered = 0; var ready = false };
 
   transient let self = Principal.fromActor(this);
   transient let rt : Types.Runtime = {
@@ -59,12 +62,31 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     quarantined;
     helperOrders;
     jobFees;
+    lateWatch;
+    stats;
     var nextHelper = 0;
   };
 
   // Runs on install and on every upgrade: a lock left set by an interrupted swap would
   // otherwise block the router forever. Interrupted swaps surface as #needsReview.
   state.busy := false;
+
+  // Once, on the upgrade that adds them: totals of the swaps completed so far, and a late-
+  // deposit watch for orders that expired before the watch existed.
+  if (not stats.ready) {
+    for (o in orders.values()) {
+      switch (o.status) {
+        case (#completed c) {
+          stats.swaps += 1;
+          stats.icpSwapped += c.icpIn;
+          stats.nakDelivered += c.nakOut;
+        };
+        case (#expired) { Engine.watch(rt, o.id) };
+        case _ {};
+      };
+    };
+    stats.ready := true;
+  };
 
   include OrdersApi(state, fees, privacy, rt, orders, active, self);
   include AdminApi(state, fees, privacy, rt, ops, orders, active, self);
@@ -138,6 +160,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     };
     await* Engine.sweepOrderFees(state, fees, rt, orders);
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
+    await* Engine.watchLate(state, rt, orders, active, self, false);
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
     forgetOldHoudiniIds(now);

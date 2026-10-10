@@ -6,8 +6,10 @@ import Cycles "mo:core/Cycles";
 import Error "mo:core/Error";
 import Int "mo:core/Int";
 import Iter "mo:core/Iter";
+import List "mo:core/List";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
+import Order "mo:core/Order";
 import Principal "mo:core/Principal";
 import Set "mo:core/Set";
 import Time "mo:core/Time";
@@ -54,6 +56,89 @@ module {
   public func setStatus(order : Order, active : Set.Set<Nat>, status : Status) {
     order.status := status;
     if (isActive(status)) { active.add(order.id) } else { active.remove(order.id) };
+  };
+
+  // No deposit within the order's window. The order is kept (not deleted) and watched for a
+  // late deposit for a few days; see watchLate.
+  public func expire(rt : Types.Runtime, order : Order, active : Set.Set<Nat>) {
+    setStatus(order, active, #expired);
+    watch(rt, order.id);
+  };
+
+  // Bounded: past `maxLateWatch` entries new expiries aren't watched (an admin can still
+  // recoverDeposit); only reachable by a flood of abandoned orders.
+  public func watch(rt : Types.Runtime, id : Nat) {
+    if (rt.lateWatch.size() < Guard.maxLateWatch or rt.lateWatch.containsKey(id)) {
+      rt.lateWatch.add(id, Time.now() + Guard.lateCheckNanos);
+    };
+  };
+
+  // ---------------------------------------------------------------------------------
+  // Late deposits. A few expired orders per tick have their deposit account checked; one
+  // that now holds ICP goes back to #awaitingDeposit and is swapped (or refunded, e.g. if
+  // too small or the price moved past its minimum) by the normal worker. Dust that wouldn't
+  // cover a refund is ignored. Nothing here moves funds.
+  // ---------------------------------------------------------------------------------
+  public func watchLate(
+    state : Types.RouterState,
+    rt : Types.Runtime,
+    orders : Map.Map<Nat, Order>,
+    active : Set.Set<Nat>,
+    self : Principal,
+    force : Bool, // manual check: don't wait for each entry's 10-minute spacing
+  ) : async* () {
+    if (Cycles.balance() < Guard.lowCycles) { return };
+    let cfg = state.config;
+    let now = Time.now();
+    // Drop finished entries, then check the most overdue ones first: a checked entry goes to
+    // the back of the queue, so every watched order gets its turn however many there are.
+    let due = List.empty<(Nat, Int)>();
+    label scan for ((id, at) in rt.lateWatch.entries().toArray().values()) {
+      let o = switch (orders.get(id)) {
+        case (?o) { o };
+        case null { rt.lateWatch.remove(id); continue scan };
+      };
+      switch (o.status) {
+        case (#expired) {};
+        case _ { rt.lateWatch.remove(id); continue scan }; // reopened, refunded or recovered
+      };
+      // Watched for 3 days after the order's own window closed.
+      if (now > o.createdAt + cfg.orderTtlSeconds * 1_000_000_000 + Guard.lateWatchNanos) {
+        rt.lateWatch.remove(id);
+        continue scan;
+      };
+      if (rt.inFlight.contains(id)) { continue scan };
+      // A manual check takes entries early too (still most overdue first).
+      if (force or at <= now) { due.add((id, at)) };
+    };
+    let picked = due.toArray().sort(func(a : (Nat, Int), b : (Nat, Int)) : Order.Order = Int.compare(a.1, b.1));
+    for ((id, at) in picked.sliceToArray(0, Nat.min(picked.size(), Guard.lateChecksPerTick)).values()) {
+      // Next check strictly after this one, so a checked entry always moves behind those
+      // still waiting (even when many expired in the same tick and share a timestamp).
+      let next = Int.max(Time.now(), at) + Guard.lateCheckNanos;
+      label one {
+      let o = switch (orders.get(id)) { case (?o) { o }; case null { break one } };
+      if (rt.inFlight.contains(id)) { break one };
+      rt.inFlight.add(id);
+      try {
+        let bal = await icp(cfg).icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
+        // Re-check after the await: an admin may have acted on it meanwhile.
+        switch (o.status) {
+          case (#expired) {
+            if (bal > 2 * cfg.icpFee) {
+              rt.lateWatch.remove(id);
+              setStatus(o, active, #awaitingDeposit); // swapped or refunded by the worker
+            } else {
+              rt.lateWatch.add(id, next);
+            };
+          };
+          case _ { rt.lateWatch.remove(id) };
+        };
+      } catch (_) {
+        rt.lateWatch.add(id, next);
+      } finally { rt.inFlight.remove(id) };
+      };
+    };
   };
 
   func icp(cfg : Types.Config) : Ext.Ledger = actor (cfg.icpLedger.toText());
@@ -124,7 +209,7 @@ module {
             };
             case (?_) {
               let deadline = order.createdAt + cfg.orderTtlSeconds * 1_000_000_000;
-              if (Time.now() >= deadline) { setStatus(order, active, #expired) };
+              if (Time.now() >= deadline) { expire(rt, order, active) };
             };
           };
           return #processed(order.status);
@@ -851,6 +936,9 @@ module {
       case (#Ok block or #Err(#Duplicate { duplicate_of = block })) {
         rt.payFromSub.remove(order.id);
         setStatus(order, active, #completed({ icpIn = p.icpIn; nakOut = p.nakAmount; block }));
+        rt.stats.swaps += 1;
+        rt.stats.icpSwapped += p.icpIn;
+        rt.stats.nakDelivered += p.nakAmount;
       };
       case (#Err(#TooOld)) {
         // Dedup window passed without a recorded success; a human must check the ledger.

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
 import { Principal } from '@icp-sdk/core/principal';
+import { crc32, encodeIcrcAccount } from '../src/account.js';
 import { createApp } from '../src/app.js';
 import { createHoudini } from '../src/houdini.js';
 import { createMockHoudini } from '../src/mockHoudini.js';
@@ -18,11 +19,32 @@ function fakeIc() {
     maxImpactBps: 500n,
     slippageBps: 100n,
     icpIsToken0: false,
+    orderTtlSeconds: 7_200n,
   };
   return {
     principal: 'relay-test',
+    routerId: 'bkyfl-uyaaa-aaaab-qhl5q-cai',
     config,
     orders,
+    stats: { swaps: 3n, icpSwapped: 250_000_000n, nakDelivered: 2_000_000_000_000n, lateWatched: 0n },
+    statsCalls: 0,
+    async publicStats() {
+      this.statsCalls += 1;
+      return this.stats;
+    },
+    async maxIcpForImpact(limitBps, hi) {
+      let lo = 0n;
+      while (hi - lo > 1_000_000n) {
+        const mid = (lo + hi) / 2n;
+        if ((await this.previewSwap(mid)).impactBps <= limitBps) lo = mid;
+        else hi = mid;
+      }
+      return lo;
+    },
+    async depositBalance(sub) {
+      const o = [...orders.values()].find((x) => Buffer.from(x.depositSubaccount).equals(Buffer.from(sub)));
+      return o ? o.paid : 0n;
+    },
     parsePrincipal(t) {
       const p = Principal.fromText(String(t || '').trim());
       if (p.isAnonymous()) throw new Error('anonymous principal');
@@ -41,12 +63,22 @@ function fakeIc() {
         refundTo: refundTo ?? recipient,
         minNakOut: minNakOut ?? 0n,
         depositAccountId: id.toString(16).padStart(64, 'a'),
+        depositSubaccount: Uint8Array.from({ length: 32 }, (_, i) => (i === 31 ? Number(id) + 1 : 0)),
+        createdAt: BigInt(Date.now()) * 1_000_000n,
         houdiniId: [],
         status: { awaitingDeposit: null },
         paid: 0n,
       };
       orders.set(id, o);
       return o;
+    },
+    cancelled: [],
+    async cancelUnfunded(id) {
+      const o = orders.get(id);
+      if (!o || o.paid > 0n || !('awaitingDeposit' in o.status)) return false;
+      o.status = { expired: null };
+      this.cancelled.push(id);
+      return true;
     },
     async attachHoudini(id, h) {
       orders.get(id).houdiniId = [h];
@@ -250,6 +282,136 @@ test('audit fixes: malformed URLs, invented quotes, bad keys, relay-set minimum'
     assert.equal(arr.code, 400, 'arrays are not accepted where strings are expected');
     const hexAmt = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '0x10' });
     assert.equal(hexAmt.code, 400);
+  } finally {
+    close();
+  }
+});
+
+test('pay with ICP: direct quote -> order -> ICP lands -> NAK delivered, no Houdini involved', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => { throw new Error('Houdini must not be used'); } });
+  const { call, close } = await serve(createApp({ houdini, ic, pokeEveryMs: 0, houdiniCacheMs: 0 }));
+  try {
+    const q = await call('POST', '/api/quote-icp', { amount: '2.5' });
+    assert.equal(q.code, 200);
+    assert.equal(q.body.blocked, null);
+    assert.equal(BigInt(q.body.icpIn), 250_000_000n);
+    assert.ok(BigInt(q.body.guaranteedNak) < BigInt(q.body.nakOut));
+    const o = await call('POST', '/api/orders', { quoteId: q.body.quoteId, recipient: ALICE });
+    assert.equal(o.code, 201);
+    assert.equal(o.body.route, 'icp');
+    assert.equal(o.body.send.symbol, 'ICP');
+    assert.equal(o.body.send.amount, '2.5');
+    assert.equal(o.body.send.to.length, 64, 'ICP account id to pay');
+    assert.match(o.body.send.icrc, /^bkyfl-uyaaa-aaaab-qhl5q-cai-[a-z2-7]{7}\.1$/, 'ICRC-1 account text for Plug/Oisy');
+    const stored = ic.orders.get(BigInt(o.body.orderId));
+    assert.equal(stored.houdiniId[0], 'icp-direct', 'router order marked as paid directly');
+    assert.equal(stored.minNakOut, BigInt(q.body.guaranteedNak), 'same guaranteed minimum as Houdini routes');
+
+    const key = { 'x-order-key': o.body.orderKey };
+    const view = `/api/orders/${o.body.orderId}`;
+    let s = await call('GET', view, undefined, key);
+    assert.equal(s.body.route, 'icp');
+    assert.equal(s.body.stage, 'awaitingDeposit');
+    assert.equal(BigInt(s.body.receivedIcp), 0n);
+    assert.equal(s.body.deposit.icrc, o.body.send.icrc);
+    stored.paid = 250_000_000n; // the visitor's wallet pays the deposit account
+    s = await call('GET', view, undefined, key);
+    assert.equal(s.body.stage, 'completed', 'relay sees the ICP land and nudges the router');
+
+    const again = await call('POST', '/api/orders', { quoteId: q.body.quoteId, recipient: ALICE });
+    assert.equal(again.code, 409, 'one order per quote');
+    const q2 = await call('POST', '/api/quote-icp', { amount: '2.5' });
+    assert.notEqual(q2.body.quoteId, q.body.quoteId, 'a used quote is not served again from the cache');
+    assert.equal((await call('POST', '/api/orders', { quoteId: q2.body.quoteId, recipient: ALICE })).code, 201, 'so a second swap of the same amount works');
+  } finally {
+    close();
+  }
+});
+
+test('pay with ICP: limits, bad amounts, and the price-impact cap with a suggested amount', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic }));
+  try {
+    for (const amount of ['abc', '-1', '1.123456789', '0x10', '', '0']) {
+      assert.equal((await call('POST', '/api/quote-icp', { amount })).code, 400, `rejects ${JSON.stringify(amount)}`);
+    }
+    const tiny = await call('POST', '/api/quote-icp', { amount: '0.05' });
+    assert.match(tiny.body.blocked, /minimum is 0.1 ICP/);
+    const huge = await call('POST', '/api/quote-icp', { amount: '60' });
+    assert.match(huge.body.blocked, /maximum is 50 ICP/);
+    assert.equal(huge.body.suggestAmount, '50');
+    // Fake pool: impact = 1 bps per 0.1 ICP, so 40 ICP is ~4% (over the 3.5% quote cap that
+    // sits 1.5 points under the router's 5% refund line).
+    const big = await call('POST', '/api/quote-icp', { amount: '40' });
+    assert.match(big.body.blocked, /above the 3.5% limit\. Try 35(\.\d+)? ICP or less/);
+    const ok = await call('POST', '/api/quote-icp', { amount: '30' });
+    assert.equal(ok.body.blocked, null);
+    const blockedOrder = await call('POST', '/api/orders', { quoteId: big.body.quoteId, recipient: ALICE });
+    assert.equal(blockedOrder.code, 400, 'a blocked quote cannot become an order');
+    assert.equal(ic.orders.size, 0);
+    const h = await call('GET', '/api/health');
+    assert.equal(h.body.limits.quoteImpactPct, 3.5);
+    assert.equal(h.body.routes.icp, true);
+  } finally {
+    close();
+  }
+});
+
+test('a stricter configured impact limit applies to Houdini routes too', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic, maxQuoteImpactBps: 5 }));
+  try {
+    const q = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' });
+    const r = q.body.routes[0];
+    assert.match(r.blocked, /above the 0.05% limit\. Try about [\d.]+ or less/);
+    assert.ok(r.suggestAmount > 0 && r.suggestAmount < 100);
+  } finally {
+    close();
+  }
+});
+
+test('stats strip: public totals, cached', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic }));
+  try {
+    const a = await call('GET', '/api/stats');
+    assert.deepEqual(a.body, { swaps: 3, icpSwapped: 2.5, nakDelivered: 20_000 });
+    await call('GET', '/api/stats');
+    assert.equal(ic.statsCalls, 1, 'one router query per minute however many visitors');
+  } finally {
+    close();
+  }
+});
+
+test('ICRC-1 account text matches the spec vectors; CRC-32 matches the standard check value', () => {
+  const owner = 'k2t6j-2nvnp-4zjm3-25dtz-6xhaa-c7boj-5gayf-oj3xs-i43lp-teztq-6ae';
+  assert.equal(crc32(Buffer.from('123456789')), 0xcbf43926);
+  const sub = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+  assert.equal(encodeIcrcAccount(owner, sub), `${owner}-dfxgiyy.102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20`);
+  const one = new Uint8Array(32);
+  one[31] = 1;
+  assert.equal(encodeIcrcAccount(owner, one), `${owner}-6cc627i.1`);
+  assert.equal(encodeIcrcAccount(owner, new Uint8Array(32)), owner, 'default subaccount is just the principal');
+});
+
+test('unpaid direct orders are cancelled after their window (freeing the slot); paid ones are left to the router', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic, directWindowMs: 40, cleanupEveryMs: 30, quoteCacheMs: 0 }));
+  try {
+    const q1 = await call('POST', '/api/quote-icp', { amount: '1' });
+    const q2 = await call('POST', '/api/quote-icp', { amount: '2' });
+    const unpaid = await call('POST', '/api/orders', { quoteId: q1.body.quoteId, recipient: ALICE });
+    const paid = await call('POST', '/api/orders', { quoteId: q2.body.quoteId, recipient: ALICE });
+    assert.ok(Date.parse(unpaid.body.send.expires) - Date.now() < 1_000, 'deposit deadline shown is the direct window');
+    ic.orders.get(BigInt(paid.body.orderId)).paid = 200_000_000n;
+    await new Promise((r) => setTimeout(r, 150));
+    assert.deepEqual(ic.cancelled, [BigInt(unpaid.body.orderId)]);
+    assert.ok('awaitingDeposit' in ic.orders.get(BigInt(paid.body.orderId)).status, 'the paid one is untouched');
   } finally {
     close();
   }

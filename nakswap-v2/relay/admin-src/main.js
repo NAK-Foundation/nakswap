@@ -56,6 +56,8 @@ const routerIdl = ({ IDL }) => {
     adminOverview: IDL.Func([], [IDL.Opt(Overview)], ['query']),
     setPaused: IDL.Func([IDL.Bool], [IDL.Bool], []),
     runRecovery: IDL.Func([], [], []),
+    checkLateDeposits: IDL.Func([], [IDL.Nat], []),
+    publicStats: IDL.Func([], [IDL.Record({ swaps: IDL.Nat, icpSwapped: IDL.Nat, nakDelivered: IDL.Nat, lateWatched: IDL.Nat })], ['query']),
     requestAudit: IDL.Func([IDL.Text], [IDL.Opt(IDL.Nat)], []),
     auditRequests: IDL.Func([], [IDL.Vec(IDL.Record({ id: IDL.Nat, at: IDL.Int, note: IDL.Text }))], ['query']),
   });
@@ -179,7 +181,9 @@ async function collect() {
     fetch('/api/health').then((r) => r.json()).catch(() => null),
     router.auditRequests(),
   ]);
-  return { ov, helpers, mainIcp, mainNak, strayIcp, strayNak, routerPool, relay, audits };
+  // Totals and the late-deposit watch (a router built before them answers with an error).
+  const stats = await router.publicStats().catch(() => null);
+  return { ov, helpers, mainIcp, mainNak, strayIcp, strayNak, routerPool, relay, audits, stats };
 }
 
 // Rules for "something looks wrong". Each: [level, text].
@@ -241,6 +245,7 @@ function render(d) {
     ['Total orders', String(h.nextOrderId)],
     ['Fee earned, sent', `${fmt(e8(ov.fees.paidTotal))} ICP`],
     ['Fee waiting', `${fmt(e8(ov.fees.accrued))} ICP`],
+    ...(d.stats ? [['Swaps completed', String(d.stats.swaps)], ['NAK delivered', fmt(e8(d.stats.nakDelivered))], ['Watched for late ICP', String(d.stats.lateWatched)]] : []),
   ];
   $('tiles').innerHTML = tiles.map(([k, v]) => `<div class="tile"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
 
@@ -314,6 +319,8 @@ async function recover() {
   $('recover').disabled = true;
   try {
     await router.runRecovery();
+    // Also look for ICP that arrived after an order expired (it revives that order).
+    await router.checkLateDeposits();
   } catch (e) {
     alert(`Failed: ${e.message}`);
   } finally {

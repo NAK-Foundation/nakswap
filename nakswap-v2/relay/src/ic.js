@@ -159,6 +159,28 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
       return r.ok;
     },
 
+    // Largest ICP amount whose swap stays at or under `limitBps` price impact (to suggest a
+    // smaller amount when a quote is over the limit). A few pool queries; 0.01 ICP steps.
+    async maxIcpForImpact(limitBps, hiE8s) {
+      let lo = 0n;
+      let hi = hiE8s;
+      for (let i = 0; i < 14 && hi - lo > 1_000_000n; i++) {
+        const mid = (lo + hi) / 2n;
+        const p = await this.previewSwap(mid);
+        if (p.amountIn > 0n && p.impactBps <= limitBps) lo = mid;
+        else hi = mid;
+      }
+      return lo;
+    },
+
+    // ICP sitting in an order's deposit account (a ledger query; costs the router nothing).
+    async depositBalance(subaccount) {
+      if (!router) return 0n;
+      return icpLedger.icrc1_balance_of({ owner: Principal.fromText(String(routerId)), subaccount: [Uint8Array.from(subaccount)] });
+    },
+
+    publicStats: () => needRouter().publicStats(),
+
     attachHoudini: (id, houdiniId) => needRouter().attachHoudini(id, houdiniId),
     cancelUnfunded: (id) => needRouter().cancelUnfunded(id),
     getOrder: async (id) => (await needRouter().getOrder(id))[0] ?? null,

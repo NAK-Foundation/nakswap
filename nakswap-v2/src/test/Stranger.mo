@@ -15,6 +15,7 @@ actor class Stranger() {
     setPaused : shared Bool -> async Bool;
     adminOverview : shared query () -> async ?Types.Overview;
     requestAudit : shared Text -> async ?Nat;
+    checkLateDeposits : shared () -> async Nat;
   };
 
   public func tryPause(router : Principal, b : Bool) : async Bool {
@@ -30,6 +31,11 @@ actor class Stranger() {
   public func tryAudit(router : Principal, note : Text) : async ?Nat {
     let r : RouterApi = actor (router.toText());
     await r.requestAudit(note);
+  };
+
+  public func tryLate(router : Principal) : async Nat {
+    let r : RouterApi = actor (router.toText());
+    await r.checkLateDeposits();
   };
 
   public func tryCancel(router : Principal, id : Nat) : async Bool {

@@ -35,6 +35,31 @@ what lets the second leg happen without the user signing anything after Houdini 
 If the swap can't happen safely (too small, too big, price impact, slippage, pool error)
 the ICP goes back to the user's principal instead (`refundTo`, defaults to the recipient).
 
+### Paying with ICP directly
+
+Visitors who already hold ICP pick "ICP, pay directly" in the token list. There is no
+Houdini leg: the relay opens a router order, marks it with `attachHoudini(id, "icp-direct")`
+(so the router keeps it for its full window instead of dropping it as unpaired), and shows the
+order's deposit account twice: as an ICP account ID (NNS app, exchanges) and as an ICRC-1
+textual account (Plug, Oisy). Everything after that is the normal router flow: same fee,
+same guaranteed minimum (quote −6%), same refunds to the principal, same price guards.
+
+- Window: 45 minutes to pay. The relay then cancels an unpaid direct order (`cancelUnfunded`)
+  to free its open-order slot; the router's own 2-hour TTL is the backstop.
+- The relay watches the deposit account (a free ledger query) while the visitor's page is
+  open and pokes the router as soon as ICP lands, so the swap starts within seconds.
+- ICP sent after the swap has started stays in that order's deposit account; recover it with
+  `router-admin.mjs recover` (`recoverDeposit`).
+
+### Late deposits
+
+An expired order (direct or Houdini) is not forgotten: the router re-checks its deposit
+account about every 10 minutes for 3 days after its window closed, most overdue first, 10
+checks per tick, at most 3,000 orders watched. ICP that turns up (more than two ledger fees)
+moves the order back to `awaitingDeposit`, and the worker swaps it, or refunds it if it is now
+too small, too big, or below the order's guaranteed minimum. `router-admin.mjs late-check`
+(or the dashboard's Run recovery) checks now.
+
 ## Swap helpers (parallel swaps)
 
 Three helper canisters (`src/helper/main.mo`) run the ICPSwap leg, one swap each at a time,
@@ -113,6 +138,7 @@ scripts/           interp-test.mjs — runs e2e.mo without a replica
 awaitingDeposit → swapping → payoutPending → completed
                            ↘ refundPending → refunded
 awaitingDeposit → expired       (nothing paid within the TTL; admin can reopen)
+expired → awaitingDeposit       (ICP arrived late: the late-deposit watch revives it)
 anything unexpected → needsReview   (funds are never guessed at; admin uses forceRefund)
 ```
 
@@ -120,6 +146,9 @@ Safety rails:
 - With helpers: each swap is settled in its own deposit account (see "Swap helpers").
   Without helpers: one swap at a time (`busy` lock) through the router's main account, settled
   from balance deltas once ICPSwap has finished paying out.
+- Price impact: quotes above `maxImpactBps` − 1.5 points (3.5% today; `MAX_QUOTE_IMPACT_BPS` on
+  Railway can lower it) are refused with the largest amount that fits suggested, so drift
+  before the swap rarely turns an accepted order into a refund.
 - Price check right before the swap: refund if impact > `maxImpactBps`, otherwise `amountOutMinimum` = quote − `slippageBps` (or the user's `minNakOut` if higher).
 - Payouts and refunds use a fixed `created_at_time` + memo, so a retry is deduplicated by the ledger instead of paying twice.
 - Only `operators` (the relay) can open orders; `poke` is public but throttled to once per 10 s per order.
@@ -128,8 +157,10 @@ Safety rails:
 
 | | |
 |-|-|
-| `POST /api/quote` `{fromId, amount, refundAddress?}` | Houdini routes to ICP, each with the NAK the router would deliver, price impact, and `blocked` if the router would refund |
-| `POST /api/orders` `{quoteId, recipient, refundAddress, refundTo?, minNakOut?}` | router order → Houdini exchange (addressTo = deposit account) → linked; returns where to send funds |
+| `POST /api/quote` `{fromId, amount, refundAddress?}` | Houdini routes to ICP, each with the NAK the router would deliver, price impact, and `blocked` (+ `suggestAmount`) if over a limit |
+| `POST /api/quote-icp` `{amount}` | paying with ICP directly: NAK out, fee, impact, guaranteed minimum, `blocked`/`suggestAmount` |
+| `GET /api/stats` | public totals: swaps completed, ICP swapped, NAK delivered (cached 60 s) |
+| `POST /api/orders` `{quoteId, recipient, refundAddress, refundTo?}` | Houdini quote: router order → Houdini exchange (addressTo = deposit account) → linked. ICP quote: router order marked `icp-direct`. Returns where to send funds |
 | `GET /api/orders/:id?key=` | router stage + Houdini status; pokes the router once Houdini reports COMPLETED |
 | `GET /api/tokens?term=` | Houdini token search |
 
@@ -185,6 +216,8 @@ node scripts/router-admin.mjs freezing-days 90
 node scripts/router-admin.mjs fees                   # fee rate, wallet, accrued, paid so far
 node scripts/router-admin.mjs set-fee 1 <principal>  # fee in % (max 5) and the wallet it goes to
 node scripts/router-admin.mjs sweep-fees             # send accrued fees now
+node scripts/router-admin.mjs stats                  # public totals + orders watched for late ICP
+node scripts/router-admin.mjs late-check             # look for late ICP in expired orders now
 ```
 
 Admin calls accept the configured admin principal or any canister controller.
@@ -287,9 +320,13 @@ Router (`src/router/main.mo`, `lib/Guard.mo`):
   stay public queries, which are free for the canister.
 - At most 150 open orders. The worker pays out and refunds first, then checks each waiting
   deposit at most once a minute, least recently checked first, 10 per tick.
-- Orders the relay never paired with a Houdini exchange are deleted after 15 minutes; the
-  relay cancels (expires) orders whose Houdini exchange expired or failed without a deposit,
-  and caps open unpaid orders at 5 per visitor.
+- Orders the relay never paired with a Houdini exchange or marked as paid in ICP are deleted
+  after 15 minutes; the relay cancels (expires) orders whose Houdini exchange expired
+  or failed without a deposit, and unpaid direct-ICP orders after 45 minutes, and caps open
+  unpaid orders at 5 per visitor.
+- Late-deposit watch: bounded (3,000 orders, 10 ledger queries per tick, 3 days each); the
+  manual `checkLateDeposits` is guardian-or-admin only and once a minute for guardians.
+- `publicStats` reads running totals (no scan of all orders).
 - Balance sanity check after every swap: more NAK than quoted (+2%) or more ICP back than
   deposited parks the order for review instead of paying someone else's funds.
 - Approvals to the pool expire after 5 minutes; payouts/refunds carry a per-order memo so two
@@ -303,8 +340,9 @@ Router (`src/router/main.mo`, `lib/Guard.mo`):
 
 Relay (`relay/src/app.js`, `server.js`):
 - Client IP from Railway's `X-Real-IP` (the left end of `X-Forwarded-For` is client-controlled).
-- Orders: 5 per IP per 10 min, 150 per hour overall (`ORDER_LIMIT_PER_HOUR` on Railway to change it). Quotes 30/min per IP, cached 20 s to save
-  the Houdini quota. Limiter memory is bounded.
+- Orders: 5 per IP per 10 min, 150 per hour overall (`ORDER_LIMIT_PER_HOUR` on Railway to change it). Quotes (Houdini and ICP) 30/min per IP and
+  1,200/hour overall, cached 20 s; a used quote is never served again from the cache. Limiter,
+  cache and quote-registry memory is bounded (the registry drops its oldest entries, never all).
 - Order links are `id-key`, where the key is an HMAC of the id under the relay seed; without
   the key `/api/orders/:id` answers 404. One router poke per order per 15 s.
 - Input validation on every field (strings only, plain decimal amounts), JSON only, 8 KB body

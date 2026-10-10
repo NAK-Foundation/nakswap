@@ -3,6 +3,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { encodeIcrcAccount } from './account.js';
 import { ORDER_STATUS } from './houdini.js';
 
 const PUBLIC_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'public');
@@ -143,6 +144,36 @@ const QUOTE_TTL_MS = 3 * 60_000;
 // ICP than estimated plus normal price drift during the 5–45 min Houdini leg; anything
 // worse (e.g. someone pushing the price just before the router buys) is refunded in ICP.
 const MIN_OUT_TOLERANCE_BPS = 600n;
+// Quotes are refused a little below the router's own price-impact refund line, so price
+// drift between the quote and the swap doesn't turn an accepted order into a refund.
+const IMPACT_MARGIN_BPS = 150n;
+// Router orders paid directly in ICP (no Houdini leg) carry this in place of a Houdini id.
+export const DIRECT_ICP = 'icp-direct';
+// How long a direct-ICP order waits for its payment before the relay cancels it (freeing its
+// open-order slot). A payment that still arrives later is picked up by the router's
+// late-deposit watch and swapped or refunded.
+export const DIRECT_WINDOW_MS = 45 * 60_000;
+const MAX_ISSUED = 20_000;
+// Keep the newest quotes when the registry is full (instead of wiping everyone's).
+function trimIssued(issued) {
+  for (const [k, v] of issued) if (Date.now() - v.at > QUOTE_TTL_MS) issued.delete(k);
+  if (issued.size <= MAX_ISSUED) return;
+  let drop = issued.size - MAX_ISSUED;
+  for (const k of issued.keys()) {
+    if (drop-- <= 0) break;
+    issued.delete(k);
+  }
+}
+const ICP_AMOUNT_RE = /^\d{1,6}(\.\d{1,8})?$/;
+const toE8s = (s) => {
+  const [w, f = ''] = s.split('.');
+  return BigInt(w) * 100_000_000n + BigInt((f + '00000000').slice(0, 8));
+};
+const icpText = (e8s) => {
+  const v = BigInt(e8s);
+  const f = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+  return `${v / 100_000_000n}${f ? `.${f}` : ''}`;
+};
 
 // Small fixed-window limiter (each order costs a canister call and a Houdini exchange).
 // Old windows are dropped as it goes, so a flood of addresses can't grow it without bound.
@@ -206,7 +237,33 @@ export function createApp({
   // stay open ~5-45 min while Houdini works) and its ~120-180 swaps/hour throughput.
   orderLimitPerHour = 150,
   cleanupEveryMs = 5 * 60_000,
+  // Optional stricter quote-time price-impact limit (bps); never above the router's.
+  maxQuoteImpactBps = null,
+  directWindowMs = DIRECT_WINDOW_MS,
 }) {
+  // The price-impact line quotes must stay under: the router's refund line minus a margin,
+  // or the configured limit if that is lower.
+  const quoteImpactCap = () => {
+    const routerMax = BigInt(ic.config.maxImpactBps);
+    let cap = routerMax > IMPACT_MARGIN_BPS + 100n ? routerMax - IMPACT_MARGIN_BPS : routerMax;
+    if (maxQuoteImpactBps != null && BigInt(maxQuoteImpactBps) < cap) cap = BigInt(maxQuoteImpactBps);
+    return cap;
+  };
+  // "Try about N or less": the largest ICP amount under the cap. It doesn't depend on the
+  // amount asked, so one search serves everyone for 30 seconds.
+  let adviceCache = { at: 0, cap: null, max: null };
+  async function impactAdvice() {
+    const cap = quoteImpactCap();
+    if (adviceCache.cap === cap && Date.now() - adviceCache.at < 30_000) return adviceCache.max;
+    try {
+      const max = await ic.maxIcpForImpact(cap, BigInt(ic.config.maxOrderIcp) * 2n);
+      adviceCache = { at: Date.now(), cap, max: max > 0n ? max : null };
+    } catch {
+      return null;
+    }
+    return adviceCache.max;
+  }
+  const depositCache = new Map(); // order id -> { at, bal }
   // Per visitor IP, plus global ceilings so many addresses together still can't flood the
   // router with orders or burn the Houdini quote allowance.
   const allowOrder = limiter(5, 10 * 60_000);
@@ -297,7 +354,13 @@ export function createApp({
       else if (q.max && Number(amount) > Number(q.max)) blocked = `Houdini maximum for this route is ${q.max}`;
       else if (icpE8s < cfg.minOrderIcp) blocked = `below the router minimum of ${Number(cfg.minOrderIcp) / 1e8} ICP`;
       else if (icpE8s > cfg.maxOrderIcp) blocked = `above the router maximum of ${Number(cfg.maxOrderIcp) / 1e8} ICP`;
-      else if (p.impactBps > cfg.maxImpactBps) blocked = `price impact ${Number(p.impactBps) / 100}% is too high`;
+      let suggest = null;
+      if (!blocked && p.impactBps > quoteImpactCap()) {
+        const maxIcp = await impactAdvice();
+        // Same token, scaled down to the ICP amount that fits (rounded down, 4 significant digits).
+        if (maxIcp) suggest = Number((Number(amount) * Number(maxIcp) / Number(icpE8s)).toPrecision(4));
+        blocked = `price impact ${Number(p.impactBps) / 100}% is above the ${Number(quoteImpactCap()) / 100}% limit${suggest ? `. Try about ${suggest} or less` : ''}`;
+      }
       routes.push({
         quoteId: q.quoteId,
         type: q.type,
@@ -313,6 +376,7 @@ export function createApp({
         requiresRefundAddress: Boolean(q.requiresRefundAddress),
         amountInUsd: q.amountInUsd ?? null,
         blocked,
+        suggestAmount: suggest,
       });
     }
     routes.sort((a, b) => {
@@ -323,13 +387,92 @@ export function createApp({
       routes,
       unavailable,
       quotedAt: Date.now(),
-      router: { ready: Boolean(ic.routerId), slippageBps: cfg.slippageBps, maxImpactBps: cfg.maxImpactBps },
+      router: { ready: Boolean(ic.routerId), slippageBps: cfg.slippageBps, maxImpactBps: cfg.maxImpactBps, quoteImpactCapBps: quoteImpactCap() },
     };
     quoteCache.set(qKey, { at: Date.now(), result });
-    for (const [k, v] of issued) if (Date.now() - v.at > QUOTE_TTL_MS) issued.delete(k);
-    if (issued.size > 20_000) issued.clear();
+    trimIssued(issued);
     for (const r of routes) issued.set(String(r.quoteId), { at: Date.now(), blocked: r.blocked, nakOut: BigInt(r.nakOut) });
     return [200, result];
+  }
+
+  // Paying with ICP directly: no Houdini leg, the visitor sends ICP to the order's deposit
+  // account from any ICP wallet or exchange. Same router, fees and protections.
+  async function quoteIcp(body, user) {
+    const cfg = ic.config;
+    const amount = str(body.amount);
+    if (!amount || !ICP_AMOUNT_RE.test(amount) || !(Number(amount) > 0)) return [400, { error: 'Enter an ICP amount, e.g. 2.5 (up to 8 decimals)' }];
+    if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
+    if (!allowQuoteGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a few minutes.' }];
+    const icpE8s = toE8s(amount);
+    const qKey = `${user.ip}|icp|${amount}`;
+    const cached = quoteCache.get(qKey);
+    if (cached && Date.now() - cached.at < quoteCacheMs) return [200, cached.result];
+    for (const [k, v] of quoteCache) if (Date.now() - v.at >= quoteCacheMs) quoteCache.delete(k);
+    let blocked = null;
+    let suggestAmount = null;
+    let p = { amountIn: 0n, nakswapFee: 0n, nakOut: 0n, impactBps: 0n };
+    if (icpE8s < cfg.minOrderIcp) blocked = `the minimum is ${icpText(cfg.minOrderIcp)} ICP`;
+    else if (icpE8s > cfg.maxOrderIcp) {
+      blocked = `the maximum is ${icpText(cfg.maxOrderIcp)} ICP per swap`;
+      suggestAmount = icpText(cfg.maxOrderIcp);
+    } else {
+      p = await ic.previewSwap(icpE8s);
+      if (p.impactBps > quoteImpactCap()) {
+        const maxIcp = await impactAdvice();
+        suggestAmount = maxIcp ? icpText((maxIcp / 1_000_000n) * 1_000_000n) : null;
+        blocked = `price impact ${Number(p.impactBps) / 100}% is above the ${Number(quoteImpactCap()) / 100}% limit${suggestAmount ? `. Try ${suggestAmount} ICP or less` : ''}`;
+      }
+    }
+    const quoteId = `icp-${crypto.randomBytes(12).toString('hex')}`;
+    const result = {
+      quoteId,
+      route: 'icp',
+      icpIn: icpE8s,
+      nakswapFeeIcp: p.nakswapFee,
+      nakOut: p.nakOut,
+      guaranteedNak: (p.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n,
+      impactBps: p.impactBps,
+      blocked,
+      suggestAmount,
+      windowMinutes: directWindowMs / 60_000,
+      quotedAt: Date.now(),
+    };
+    quoteCache.set(qKey, { at: Date.now(), result });
+    trimIssued(issued);
+    issued.set(quoteId, { at: Date.now(), kind: 'icp', blocked, nakOut: p.nakOut, icpE8s });
+    return [200, result];
+  }
+
+  async function createDirectOrder(q, recipientP, refundToP, user) {
+    const minNakOut = (q.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n;
+    const order = await ic.createOrder({ recipient: recipientP, refundTo: refundToP, minNakOut: minNakOut > 0n ? minNakOut : null });
+    // Marks the order as paid directly (so the router keeps it for the full window instead of
+    // dropping it as unpaired after 15 minutes). Without it, don't show where to pay.
+    if ((await ic.attachHoudini(order.id, DIRECT_ICP)) !== true) {
+      throw Object.assign(new Error('Could not set up the order. Nothing was sent; please try again.'), { status: 502, expose: true });
+    }
+    log('order', { id: order.id.toString(), route: 'icp' });
+    openOrders.set(order.id.toString(), { direct: true, at: Date.now(), ip: user.ip, user });
+    return [
+      201,
+      {
+        orderId: order.id,
+        orderKey: orderKey(secret, order.id),
+        route: 'icp',
+        send: {
+          amount: icpText(q.icpE8s),
+          symbol: 'ICP',
+          chain: 'icp',
+          to: order.depositAccountId,
+          icrc: ic.routerId ? encodeIcrcAccount(ic.routerId, order.depositSubaccount) : null,
+          tag: null,
+          expires: new Date(Date.now() + directWindowMs).toISOString(),
+        },
+        guaranteedNak: minNakOut,
+        icpDepositAccount: order.depositAccountId,
+        nakRecipient: recipientP.toText(),
+      },
+    ];
   }
 
   async function createOrder(body, user) {
@@ -356,6 +499,11 @@ export function createApp({
     if (q.blocked) return [400, { error: `That route can't be used: ${q.blocked}.` }];
     if (!allowOrderGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a little while.' }];
     issued.delete(quoteId); // one order per quote
+    // ...and never hand the same quote out again from the short-lived quote cache.
+    for (const [k, v] of quoteCache) {
+      if (v.result.quoteId === quoteId || v.result.routes?.some((r) => String(r.quoteId) === quoteId)) quoteCache.delete(k);
+    }
+    if (q.kind === 'icp') return createDirectOrder(q, recipientP, refundToP, user);
     const minNakOut = (q.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n;
 
     // 1. Router order first: it mints the deposit account Houdini will pay into.
@@ -428,6 +576,47 @@ export function createApp({
     if (!order) return [404, { error: 'order not found' }];
     let hd = null;
     const houdiniId = order.houdiniId[0];
+    const direct = houdiniId === DIRECT_ICP;
+    if (direct) {
+      const stage = statusName(order.status);
+      let received = null;
+      if (stage === 'awaitingDeposit' || stage === 'expired') {
+        const k = String(order.id);
+        const c = depositCache.get(k);
+        if (c && Date.now() - c.at < houdiniCacheMs) received = c.bal;
+        else {
+          received = await ic.depositBalance(order.depositSubaccount).catch(() => null);
+          depositCache.set(k, { at: Date.now(), bal: received });
+          if (depositCache.size > 5_000) depositCache.clear();
+        }
+        // ICP has landed: nudge the router instead of waiting for its next pass.
+        if (stage === 'awaitingDeposit' && received > 0n && !(Date.now() - (lastPoke.get(k) || 0) < pokeEveryMs)) {
+          lastPoke.set(k, Date.now());
+          if (lastPoke.size > 5_000) lastPoke.clear();
+          await ic.poke(order.id).catch(() => {});
+        }
+      }
+      const fresh = (await ic.getOrder(BigInt(id))) ?? order;
+      return [
+        200,
+        {
+          orderId: fresh.id,
+          route: 'icp',
+          stage: statusName(fresh.status),
+          detail: Object.values(fresh.status)[0],
+          houdini: null,
+          receivedIcp: received,
+          deposit: {
+            to: fresh.depositAccountId,
+            icrc: ic.routerId ? encodeIcrcAccount(ic.routerId, fresh.depositSubaccount) : null,
+            expires: new Date(Number(BigInt(fresh.createdAt) / 1_000_000n) + directWindowMs).toISOString(),
+          },
+          recipient: fresh.recipient.toText(),
+          refundTo: fresh.refundTo.toText(),
+          icpDepositAccount: fresh.depositAccountId,
+        },
+      ];
+    }
     if (houdiniId) {
       try {
         // Several open tabs polling the same order share one Houdini lookup.
@@ -477,12 +666,38 @@ export function createApp({
     ];
   }
 
+  // Public totals for the stats strip, refreshed at most once a minute.
+  let statsCache = { at: 0, v: null };
+  async function stats() {
+    if (statsCache.v && Date.now() - statsCache.at < 60_000) return statsCache.v;
+    try {
+      const s = await ic.publicStats();
+      statsCache = { at: Date.now(), v: { swaps: Number(s.swaps), icpSwapped: Number(s.icpSwapped) / 1e8, nakDelivered: Number(s.nakDelivered) / 1e8 } };
+    } catch {
+      if (!statsCache.v) return { swaps: null, icpSwapped: null, nakDelivered: null };
+    }
+    return statsCache.v;
+  }
+
   // Every few minutes: orders older than 20 min whose Houdini exchange expired, failed, was
   // refunded or deleted are cancelled on the router (only if nothing was deposited).
   async function cleanup() {
     let checked = 0;
     for (const [id, o] of openOrders) {
       if (Date.now() - o.at > 6 * 3600_000) { openOrders.delete(id); continue; }
+      if (o.direct) {
+        // Direct ICP: past its window and still unpaid -> cancel, freeing the slot. (If ICP
+        // is there, the router refuses and swaps it as usual.)
+        if (Date.now() - o.at < directWindowMs || checked >= 30) continue;
+        checked += 1;
+        try {
+          if (await ic.cancelUnfunded(BigInt(id))) log('cancelled unpaid direct order', { id });
+          openOrders.delete(id);
+        } catch {
+          // try again next round
+        }
+        continue;
+      }
       if (Date.now() - o.at < 20 * 60_000 || checked >= 30) continue;
       checked += 1;
       try {
@@ -543,8 +758,12 @@ export function createApp({
             minOrderIcp: Number(cfg.minOrderIcp) / 1e8,
             maxOrderIcp,
             maxImpactPct: Number(cfg.maxImpactBps) / 100,
+            quoteImpactPct: Number(quoteImpactCap()) / 100,
             slippagePct: Number(cfg.slippageBps) / 100,
+            orderWindowMinutes: Number(cfg.orderTtlSeconds) / 60,
+            directWindowMinutes: directWindowMs / 60_000,
           },
+          routes: { houdini: houdini.ready !== false, icp: Boolean(ic.routerId) },
           fee: { pct: Number(ic.feeBps ?? 100n) / 100, appliesTo: 'ICP received, completed swaps only' },
         });
       }
@@ -556,6 +775,14 @@ export function createApp({
       if (req.method === 'POST' && url.pathname === '/api/quote') {
         const [code, body] = await quote(await readBody(req), user);
         return json(res, code, body);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/quote-icp') {
+        const [code, body] = await quoteIcp(await readBody(req), user);
+        return json(res, code, body);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/stats') {
+        if (!allowView(user.ip)) return json(res, 429, { error: 'too many requests, slow down' });
+        return json(res, 200, await stats());
       }
       if (req.method === 'POST' && url.pathname === '/api/orders') {
         const [code, body] = await createOrder(await readBody(req), user);

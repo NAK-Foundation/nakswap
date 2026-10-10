@@ -80,7 +80,7 @@ mixin (
           if (bal == 0) {
             // Kept as #expired (frees the open-order slot; reopen / recoverDeposit still work
             // if Houdini delivers after all).
-            Engine.setStatus(o, active, #expired);
+            Engine.expire(rt, o, active);
             true;
           } else { false };
         };

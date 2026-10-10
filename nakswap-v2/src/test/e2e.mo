@@ -296,7 +296,43 @@ actor Test {
     let rec = await router.recoverDeposit(o7b.id, frank);
     check("stray deposit recovered (" # debug_show rec # ")", rec == #ok({ icp = ICP - icpFee; nak = 0 }) and (await icp.icrc1_balance_of({ owner = frank; subaccount = null })) == ICP - icpFee);
     check("recover refuses unknown order ids", switch (await router.recoverDeposit(o7.id + 100, frank)) { case (#err _) { true }; case _ { false } });
+    // 7b. late deposit: a direct-ICP order paid after its window is revived and swapped.
+    let lucy = Principal.fromBlob("\0A\10");
+    let o7c = await newOrder(lucy, null);
+    check("direct ICP order marked", await router.attachHoudini(o7c.id, "icp-direct"));
+    ignore await router.poke(o7c.id);
+    check("direct order expired", statusTag(await statusOf(o7c.id)) == "expired");
+    check("expired orders are watched for late deposits", (await router.publicStats()).lateWatched == 2);
+    ignore await router.checkLateDeposits();
+    check("nothing arrived: stays expired", statusTag(await statusOf(o7c.id)) == "expired");
+    await houdiniPays(o7c.depositAccountId, 15_000); // dust, less than a refund would cost
+    ignore await router.checkLateDeposits();
+    check("dust doesn't revive an order", statusTag(await statusOf(o7c.id)) == "expired");
+    check("stranger can't trigger late checks", (await (await Stranger.Stranger()).tryLate(routerId)) == 0);
+    await houdiniPays(o7c.depositAccountId, ICP);
+    ignore await router.checkLateDeposits();
+    check("late ICP revives the order", statusTag(await statusOf(o7c.id)) == "awaitingDeposit");
+    check("and it is swapped (got " # statusTag(await pokeUntilSettled(o7c.id)) # ")", statusTag(await statusOf(o7c.id)) == "completed");
+    check("lucy got her NAK", (await nak.icrc1_balance_of({ owner = lucy; subaccount = null })) > 0);
+    check("revived order no longer watched", (await router.publicStats()).lateWatched == 1);
     check("reopen works", (await router.reopen(o7.id)) == ?#awaitingDeposit);
+    ignore await router.checkLateDeposits();
+    check("reopened order dropped from the watch", (await router.publicStats()).lateWatched == 0);
+    // Every watched order gets its turn: 15 expired orders, only the last one is paid; checks
+    // take the most overdue first, so the second pass reaches it.
+    var lastLate = o7c;
+    for (k in Nat.range(0, 15)) {
+      let o = await newOrder(Principal.fromBlob("\0A\11"), null);
+      ignore await router.attachHoudini(o.id, "icp-direct");
+      ignore await router.poke(o.id);
+      lastLate := o;
+    };
+    check("15 expired orders watched", (await router.publicStats()).lateWatched == 15);
+    await houdiniPays(lastLate.depositAccountId, ICP);
+    ignore await router.checkLateDeposits();
+    ignore await router.checkLateDeposits();
+    check("the newest one isn't starved (" # statusTag(await statusOf(lastLate.id)) # ")", statusTag(await statusOf(lastLate.id)) == "awaitingDeposit");
+    check("and only it left the watch", (await router.publicStats()).lateWatched == 14);
     ignore await router.setConfig(cfg);
 
     // ---- 8. access control ----
@@ -493,6 +529,18 @@ actor Test {
       };
     };
     check("open orders capped at 150 (opened " # opened.toText() # " more)", capped and (await router.activeOrderIds()).size() == 150);
+
+    // Public stats strip: totals of completed swaps only.
+    let st = await router.publicStats();
+    var swaps = 0;
+    var nakSum = 0;
+    for (i in Nat.range(0, 400)) {
+      switch (await router.getOrder(i)) {
+        case (?v) { switch (v.status) { case (#completed c) { swaps += 1; nakSum += c.nakOut }; case _ {} } };
+        case null {};
+      };
+    };
+    check("public stats match the completed orders (" # debug_show st # ")", st.swaps == swaps and st.nakDelivered == nakSum and swaps >= 8 and st.icpSwapped > 0);
 
     Debug.print(if (failures == 0) { "ALL PASSED" } else { failures.toText() # " FAILED" });
   };

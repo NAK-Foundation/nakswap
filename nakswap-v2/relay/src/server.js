@@ -46,7 +46,10 @@ const prices = createPrices();
 // invalidates existing order links, so set it before launch and leave it).
 const secret = env.ORDER_KEY_SECRET || (env.RELAY_IDENTITY_SEED ? `nakswap-order-key:${env.RELAY_IDENTITY_SEED}` : undefined);
 const orderLimitPerHour = Number(env.ORDER_LIMIT_PER_HOUR) > 0 ? Number(env.ORDER_LIMIT_PER_HOUR) : undefined;
-const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, log: (...a) => console.log(new Date().toISOString(), ...a) });
+// Optional stricter quote-time price-impact limit in basis points (default: the router's
+// refund line minus 1.5 points).
+const maxQuoteImpactBps = Number(env.MAX_QUOTE_IMPACT_BPS) > 0 ? Number(env.MAX_QUOTE_IMPACT_BPS) : null;
+const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, maxQuoteImpactBps, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
 const server = http.createServer((req, res) =>
   handle(req, res).catch((e) => {

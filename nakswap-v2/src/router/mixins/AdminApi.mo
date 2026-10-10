@@ -123,6 +123,11 @@ mixin (
     };
   };
 
+  // Public totals for the swap page's stats strip: completed swaps only, aggregates only.
+  public query func publicStats() : async { swaps : Nat; icpSwapped : Nat; nakDelivered : Nat; lateWatched : Nat } {
+    { swaps = rt.stats.swaps; icpSwapped = rt.stats.icpSwapped; nakDelivered = rt.stats.nakDelivered; lateWatched = rt.lateWatch.size() };
+  };
+
   public query func auditRequests() : async [{ id : Nat; at : Int; note : Text }] {
     ops.audits.values().map(func(a : Types.AuditRequest) : { id : Nat; at : Int; note : Text } = { id = a.id; at = a.at; note = a.note }).toArray();
   };
@@ -401,6 +406,20 @@ mixin (
   public shared ({ caller }) func runRecovery() : async () {
     if (not isGuardian(caller)) { return };
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
+  };
+
+  // Check expired orders for late deposits now (it also runs on every tick). Moves nothing:
+  // an order whose deposit account now holds ICP goes back to the normal swap/refund flow.
+  // Guardians at most once a minute (each check is up to 10 ledger calls); admin unthrottled.
+  transient var lastLateCheck : Int = 0;
+  public shared ({ caller }) func checkLateDeposits() : async Nat {
+    if (not isGuardian(caller)) { return 0 };
+    if (not Orders.isAdmin(state.config, caller)) {
+      if (Time.now() - lastLateCheck < 60_000_000_000) { return rt.lateWatch.size() };
+      lastLateCheck := Time.now();
+    };
+    await* Engine.watchLate(state, rt, orders, active, self, true);
+    rt.lateWatch.size();
   };
 
   // Funds a stranger sent to a helper, set aside by the helper in the router's stray account.

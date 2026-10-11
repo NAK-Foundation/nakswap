@@ -522,6 +522,7 @@ actor Test {
     ignore await router.attachHoudini(oc.id, "icp-direct");
     await houdiniPays(oc.depositAccountId, ICP / 20); // a 'test' transfer below the minimum
     check("test transfer refunded", statusTag(await pokeUntilSettled(oc.id)) == "refunded");
+    check("below 0.1 ICP: no NAK bought, ICP back minus one ledger fee", (await nak.icrc1_balance_of({ owner = vc; subaccount = null })) == 0 and (await icp.icrc1_balance_of({ owner = vc; subaccount = null })) == ICP / 20 - icpFee);
     await houdiniPays(oc.depositAccountId, 2 * ICP); // the real payment
     ignore await router.checkLateDeposits();
     check("real payment picked up (" # statusTag(await statusOf(oc.id)) # ")", statusTag(await statusOf(oc.id)) == "awaitingDeposit");

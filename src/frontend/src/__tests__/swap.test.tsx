@@ -132,7 +132,7 @@ describe("SwapPage quote preview", () => {
 
     await waitFor(() =>
       expect(coreInfraMock.actor.getQuote).toHaveBeenCalledWith(
-        "USDC:Solana",
+        "BTC:Bitcoin",
         100_000_000n,
         RouteType.private,
       ),

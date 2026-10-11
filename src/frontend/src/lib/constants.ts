@@ -2,9 +2,6 @@
 export const ICP_SYMBOL = "ICP";
 export const NAK_SYMBOL = "NAK";
 
-/** Token preselected in the "You send" picker when the swap page loads. */
-export const DEFAULT_SEND_TOKEN = { symbol: "USDC", chain: "Solana" } as const;
-
 /** Ledger decimals: ICP uses e8s (8), NAK uses 8 decimals. */
 export const ICP_DECIMALS = 8;
 export const NAK_DECIMALS = 8;

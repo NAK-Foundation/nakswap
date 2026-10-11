@@ -330,7 +330,7 @@
           <label class="label" for="recipient">Where should NAK go?</label>
           <div class="box"><input id="recipient" class="addr-in" placeholder="Your ICP principal, e.g. abcde-fghij-…-xyz" autocomplete="off" spellcheck="false" aria-describedby="recipientHint"></div>
           <div class="hint" id="recipientHint" role="status"></div>
-          <div class="help">Use the principal of a wallet you control. No ICP wallet yet? <a href="#oisy" id="oisyLink">Get one with OISY</a>. Don’t use an exchange account: exchanges can’t receive NAK and it may be lost. For more privacy, use a fresh wallet: NAK payouts are public on the ICP ledger like any transfer.</div>
+          <div class="help">Use the principal of a wallet you control, copied from its Receive screen, never from past transactions: scammers send tiny amounts from look-alike addresses hoping you’ll paste theirs. Check the first and last few characters match. No ICP wallet yet? <a href="#oisy" id="oisyLink">Get one with OISY</a>. Don’t use an exchange account: exchanges can’t receive NAK and it may be lost. For more privacy, use a fresh wallet: NAK payouts are public on the ICP ledger like any transfer.</div>
         </div>
 
         <div class="block" id="refundBlock">
@@ -621,7 +621,7 @@
     $('refund').disabled = false;
     $('refundLabel').textContent = `Refund address (your ${t.chainName} wallet)`;
     $('refund').placeholder = f ? `${f.ph}  ${t.chainName} address` : `${t.chainName} address`;
-    $('refundHelp').textContent = `If Houdiniswap can't finish its step, your ${t.symbol} is sent back here. Paste a ${t.chainName} address you control${f ? ` (${f.hint})` : ''}. Don't use an exchange deposit address.`;
+    $('refundHelp').textContent = `If Houdiniswap can't finish its step, your ${t.symbol} is sent back here. Paste a ${t.chainName} address you control${f ? ` (${f.hint})` : ''}, copied from your wallet, not from past transactions. Don't use an exchange deposit address.`;
     if (chainChanged) $('refund').value = '';
     checkRefund();
     updateAmountHint();

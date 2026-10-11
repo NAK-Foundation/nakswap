@@ -171,7 +171,9 @@ module {
   };
 
   // Smallest balance that counts as a payment (anti-dust floor).
-  public func minDeposit(cfg : Types.Config) : Nat { Nat.max(Guard.minDepositE8s, 2 * cfg.icpFee + 1) };
+  public func minDeposit(cfg : Types.Config) : Nat {
+    Nat.max(Nat.min(Guard.minDepositE8s, cfg.minOrderIcp / 2), 2 * cfg.icpFee + 1);
+  };
 
   // A finished or expired order whose deposit account holds nothing that is owed to anyone
   // (no fee waiting there, no payout from it, no funds with a helper).
@@ -328,7 +330,7 @@ module {
         };
         if (rt.inFlight.contains(id)) { return #busy };
 
-        // Dust (under 0.01 ICP, and never less than two ledger fees) isn't a payment.
+        // Dust (under the anti-dust floor, and never less than two ledger fees) isn't a payment.
         if (bal < minDeposit(cfg)) {
           switch (order.houdiniId) {
             case null {

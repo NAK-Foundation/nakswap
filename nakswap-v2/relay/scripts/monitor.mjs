@@ -46,7 +46,7 @@ const EXPECT = {
   // Safety limits a stolen admin key could loosen.
   maxSlippageBps: Number(process.env.EXPECT_MAX_SLIPPAGE_BPS || 100),
   maxImpactBps: Number(process.env.EXPECT_MAX_IMPACT_BPS || 500),
-  minOrderIcp: Number(process.env.EXPECT_MIN_ORDER_ICP || 0.1),
+  minOrderIcp: Number(process.env.EXPECT_MIN_ORDER_ICP || 1),
   maxOrderTtlSeconds: Number(process.env.EXPECT_MAX_ORDER_TTL || 7_200),
 };
 

@@ -121,7 +121,7 @@
       <ul>
         <li>If Houdiniswap can’t complete its step, Houdiniswap returns your token to your refund address under its own terms. We don’t control that step.</li>
         <li>If the ICP to NAK step can’t run, the router refunds the ICP to your principal, minus network fees.</li>
-        <li>ICP that arrives after an order’s deadline, or after its swap has finished, is picked up automatically for 3 days and swapped or refunded. Very small amounts that wouldn’t cover a transfer fee are ignored.</li>
+        <li>ICP that arrives after an order’s deadline, or after its swap has finished, is picked up automatically for 3 days and swapped or refunded. Amounts under 0.5 ICP (or under half the minimum order, if lower) are treated as dust: they aren’t swapped or refunded automatically, and after 3 days they are set aside in an account the router controls. Message us on Telegram with your order code to have them returned.</li>
         <li>An order that needs a human look is held, not lost. Message us on Telegram with your order code.</li>
       </ul>
     </li>

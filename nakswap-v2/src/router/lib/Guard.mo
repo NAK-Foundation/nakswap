@@ -37,14 +37,16 @@ module {
   public let lateWatchNanos : Int = 259_200_000_000_000; // 3 days
   public let lateChecksPerTick : Nat = 10;
   public let maxLateWatch : Nat = 3_000;
-  // Anti-dust floor (0.01 ICP). Less than this in a deposit account is dust, not a
+  // Anti-dust floor (0.5 ICP, and never more than half the minimum order, so a lowered
+  // minimum can't leave real payments below the floor). Less than this in a deposit account is dust, not a
   // payment: it doesn't start a swap or a refund on a waiting order, doesn't revive an
   // expired or finished one, and doesn't stop the relay cancelling an unpaid order. Anyone
   // can send dust (e.g. look-alike "address poisoning" transfers); acting on it would only
-  // spend cycles and ledger fees. The smallest real order is 0.1 ICP. When an order's
+  // spend cycles and ledger fees. Between the floor and the minimum order, ICP is refunded
+  // as too small. When an order's
   // late-deposit watch ends, whatever dust is left (ICP and NAK) is moved to the router's
   // stray account (admin: recoverStray), never while the order could still be paid.
-  public let minDepositE8s : Nat = 1_000_000;
+  public let minDepositE8s : Nat = 50_000_000;
 
   // Price guard: a swap waits if the pool's live price is this much worse than its recent
   // average (3%); an average older than 10 minutes is ignored (rebuilt from fresh samples).

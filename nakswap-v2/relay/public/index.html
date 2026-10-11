@@ -318,6 +318,7 @@
         </div>
 
         <button class="btn primary" id="swapBtn" type="button" disabled>Choose a token</button>
+        <div class="help" style="text-align:center">By swapping you agree to the <a href="/terms">Terms of Use</a>.</div>
         <div class="err" id="quoteErr" role="alert"></div>
       </div>
 
@@ -374,7 +375,7 @@
     <p>The NAK token is not an investment. It is not designed or intended to appreciate in value, and NAK makes no promise of profit, return, or yield of any kind. Nothing on this site is financial, investment, legal, or tax advice. All products and services are provided &ldquo;as is,&rdquo; without warranties of any kind, and you use them at your own risk.</p>
     <p>&copy; 2026 NAK New Age Kapital. All rights reserved.</p>
   </section>
-  <span>NAKSwap by New Age Kapital. Keep your order number for support.</span>
+  <span>Questions or issues? Telegram <a href="https://t.me/NAKSTOKEN" target="_blank" rel="noopener">@NAKSTOKEN</a>, with your order code. We never message first or ask for keys. · <a href="/terms">Terms of Use</a></span>
   <span>Quotes from Houdiniswap and ICPSwap. Independent project, not affiliated with Houdiniswap, ICPSwap, DFINITY or OISY.</span>
 </footer>
 
@@ -910,7 +911,7 @@
         else setStop('s2', direct ? null : 'fail', direct ? '' : 'No ICP arrived before the order expired. If Houdiniswap delivers late (within 3 days), the router swaps or refunds it automatically, usually within about 10 minutes.');
         setStop('s3', null, '');
       } else if (o.stage === 'needsReview') {
-        setStop('s2', 'fail', `Held for manual review. Your funds are safe; contact support with this order number.`);
+        setStop('s2', 'fail', `Held for manual review. Your funds are held, not lost: message us on Telegram @NAKSTOKEN with this order code.`);
         setStop('s3', null, '');
       } else {
         const t = { awaitingDeposit: hs === 4 ? 'ICP received, starting the swap' : direct ? '' : 'Waiting for ICP from Houdiniswap', swapping: 'Swapping ICP for NAK on ICPSwap', payoutPending: 'Swap done, sending NAK', refundPending: 'Returning ICP to your principal' }[o.stage] ?? o.stage;

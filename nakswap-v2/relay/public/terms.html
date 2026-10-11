@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms of Use · NAKSwap</title>
+<meta name="description" content="Terms of Use for NAKSwap by New Age Kapital.">
+<link rel="icon" href="/favicon.png">
+<style>
+  @font-face { font-family: "Inter"; font-weight: 400; font-display: swap; src: url(/fonts/inter-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Inter"; font-weight: 500; font-display: swap; src: url(/fonts/inter-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Oswald"; font-weight: 500; font-display: swap; src: url(/fonts/oswald-latin-500-normal.woff2) format("woff2"); }
+  :root {
+    --nak-bg: #08090a; --nak-surface: #0e1011; --nak-border: rgba(255, 255, 255, 0.09);
+    --nak-border-strong: rgba(255, 255, 255, 0.16); --nak-text: #f4f4f5; --nak-text-secondary: #a1a1aa;
+    --nak-text-muted: #8a8a93; --nak-accent: #8b5cf6; --nak-warn: #f59e0b;
+    --font-display: "Oswald", system-ui, sans-serif; --font-body: "Inter", system-ui, sans-serif; --radius: 4.5px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--nak-bg); color: var(--nak-text); }
+  body { font: 16px/1.65 var(--font-body); -webkit-font-smoothing: antialiased; }
+  a { color: var(--nak-text); text-underline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--nak-accent); outline-offset: 2px; }
+  nav { border-bottom: 1px solid var(--nak-border); }
+  .nav-in { max-width: 1280px; margin: 0 auto; padding: 0 16px; height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+  .brand img { width: 26px; height: 26px; }
+  .wordmark { font-family: var(--font-display); font-weight: 500; font-size: 18px; letter-spacing: .14em; text-transform: uppercase; }
+  .brand-sub { padding-left: 10px; border-left: 1px solid var(--nak-border-strong); font-size: 11px; color: var(--nak-text-muted); }
+  .back { font-size: 14px; color: var(--nak-text-secondary); text-decoration: none; }
+  .back:hover { color: var(--nak-text); }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 72px; }
+  h1 { font-size: clamp(30px, 4vw, 40px); line-height: 1.15; font-weight: 500; letter-spacing: -0.02em; margin: 0 0 8px; }
+  .updated { color: var(--nak-text-muted); font-size: 14px; margin: 0 0 28px; }
+  .lede { font-size: 17px; color: var(--nak-text-secondary); margin: 0 0 28px; }
+  .notice { border: 1px solid var(--nak-border); border-left: 2px solid var(--nak-warn); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 32px; font-size: 15px; color: var(--nak-text-secondary); }
+  .notice b { color: var(--nak-text); font-weight: 500; }
+  ol.terms { list-style: none; counter-reset: sec; margin: 0; padding: 0; }
+  ol.terms > li { counter-increment: sec; padding: 22px 0; border-top: 1px solid var(--nak-border); }
+  ol.terms > li > h2 { display: flex; gap: 12px; align-items: baseline; font-size: 20px; font-weight: 500; letter-spacing: -0.01em; margin: 0 0 8px; }
+  ol.terms > li > h2::before { content: counter(sec); font-family: var(--font-display); color: var(--nak-accent); min-width: 22px; }
+  ol.terms p, ol.terms ul { margin: 0 0 10px; color: var(--nak-text-secondary); }
+  ol.terms ul { padding-left: 20px; }
+  ol.terms li li { margin-bottom: 4px; }
+  ol.terms strong { color: var(--nak-text); font-weight: 500; }
+  footer { max-width: 720px; margin: 0 auto; padding: 24px 16px 40px; border-top: 1px solid var(--nak-border); font-size: 13px; color: var(--nak-text-muted); }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-in">
+    <a class="brand" href="/" aria-label="NAKSwap home">
+      <img src="/nak-shell.png" alt="">
+      <span class="wordmark">N.A.K.</span>
+      <span class="brand-sub">NAKSwap</span>
+    </a>
+    <a class="back" href="/">Back to the swap</a>
+  </div>
+</nav>
+
+<main>
+  <h1>Terms of Use</h1>
+  <p class="updated">Last updated October 10, 2026</p>
+  <p class="lede">These terms cover your use of NAKSwap: this website and the NAKSwap router and helper canisters on the Internet Computer that carry out swaps. NAKSwap is run by NAK (New Age Kapital), a nonprofit organization (“NAK”, “we”, “us”). By using NAKSwap you agree to these terms. If you don’t agree, please don’t use it.</p>
+
+  <div class="notice"><b>Support is only on Telegram, at <a href="https://t.me/NAKSTOKEN" target="_blank" rel="noopener">@NAKSTOKEN</a>.</b> We will never message you first, never ask for your seed phrase, password or private keys, and never ask you to send funds to “fix” or “unlock” an order. Anyone who does is not us.</div>
+
+  <ol class="terms">
+    <li>
+      <h2>What NAKSwap does</h2>
+      <p>NAKSwap helps you get NAK, a token on the Internet Computer (ICP). You can pay with a token on another network, which <strong>Houdiniswap</strong>, an independent service, converts into ICP, or you can pay with ICP directly. The NAKSwap router then buys NAK on <strong>ICPSwap</strong>, an independent exchange, and sends it to the ICP principal you give.</p>
+      <p>There are no accounts. While a swap is in progress, your ICP and the NAK bought with it pass through accounts controlled by the NAKSwap router (an order’s deposit account and the router’s swap helpers) until the NAK is paid out to you or the ICP is refunded.</p>
+    </li>
+    <li>
+      <h2>Who can use it</h2>
+      <ul>
+        <li>You must be at least 18 years old, or the age of majority where you live if that is higher, and able to agree to these terms.</li>
+        <li>You must not be a person or entity named on a sanctions list, or located in, or acting for someone in, a country or region subject to comprehensive sanctions.</li>
+        <li>You are responsible for making sure that using NAKSwap, and holding or swapping these tokens, is legal where you are. Don’t use NAKSwap where it isn’t.</li>
+      </ul>
+    </li>
+    <li>
+      <h2>Your responsibilities</h2>
+      <ul>
+        <li><strong>Addresses.</strong> Give the principal of an ICP wallet you control. Exchange accounts can’t receive NAK. Refund addresses must be on the same network as the token you send.</li>
+        <li><strong>Payments.</strong> Send the amount shown, in one transfer, to the address shown for your order, before its deadline.</li>
+        <li><strong>Your order code.</strong> Keep it. It is the only way to track your swap and to get help with it.</li>
+        <li><strong>Your wallet.</strong> Keep your wallet and its keys secure. Blockchain transfers are final: we cannot reverse a transfer or recover funds sent to a wrong address, a wrong network, or someone who tricked you.</li>
+      </ul>
+    </li>
+    <li>
+      <h2>Fees and prices</h2>
+      <ul>
+        <li>NAKSwap charges a fee of 1% of the ICP that reaches the router, taken only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount we show already has the fee taken out.</li>
+        <li>Houdiniswap’s own fee and network costs are included in its quote. Blockchain networks charge their own small transfer fees.</li>
+        <li>Quotes are estimates. Prices move, and the NAK you receive depends on the price when your ICP reaches the router. Each order has a minimum: if the swap can’t deliver at least that much NAK, the ICP is refunded to your principal instead of being swapped.</li>
+        <li>Swaps that would move the NAK price too much are refused or refunded, and orders have minimum and maximum sizes. The current limits are shown on the swap page.</li>
+      </ul>
+    </li>
+    <li>
+      <h2>Refunds and problems</h2>
+      <ul>
+        <li>If Houdiniswap can’t complete its step, Houdiniswap returns your token to your refund address under its own terms. We don’t control that step.</li>
+        <li>If the ICP to NAK step can’t run, the router refunds the ICP to your principal, minus network fees.</li>
+        <li>ICP that arrives after an order’s deadline, or after its swap has finished, is picked up automatically for 3 days and swapped or refunded. Very small amounts that wouldn’t cover a transfer fee are ignored.</li>
+        <li>An order that needs a human look is held, not lost. Message us on Telegram with your order code.</li>
+      </ul>
+    </li>
+    <li>
+      <h2>Third-party services</h2>
+      <p>Houdiniswap, ICPSwap, the Internet Computer network, and wallets such as OISY are run by others. Their own terms apply when you use them through NAKSwap, and we are not responsible for their availability, decisions, fees or failures. NAKSwap is independent and not affiliated with Houdiniswap, ICPSwap, DFINITY or OISY.</p>
+    </li>
+    <li>
+      <h2>Things you may not do</h2>
+      <ul>
+        <li>Use NAKSwap with funds from crime, or for money laundering, terrorist financing, fraud or evading sanctions.</li>
+        <li>Attack, overload, probe for weaknesses to exploit, or interfere with NAKSwap or its canisters, or try to get funds you aren’t entitled to.</li>
+        <li>Pretend to be NAK, NAKSwap or our support.</li>
+      </ul>
+      <p>We may refuse or stop serving anyone who does.</p>
+    </li>
+    <li>
+      <h2>Pausing and changes</h2>
+      <p>We may pause NAKSwap at any time, for example for security or maintenance. While paused, no new orders or swaps start; payouts and refunds already under way still go through. We may change or discontinue features, and we may update these terms by posting a new version here. Using NAKSwap after an update means you accept it.</p>
+    </li>
+    <li>
+      <h2>Privacy</h2>
+      <ul>
+        <li>NAKSwap has no sign-ups and keeps no profiles.</li>
+        <li>To quote and route a Houdiniswap swap, your IP address, browser type and time zone are passed to Houdiniswap.</li>
+        <li>The router stores what it needs to process each order: the principals you give, amounts and status. The link to a Houdiniswap order is deleted 30 days after the order finishes.</li>
+        <li>Transfers on the Internet Computer, including NAK payouts, are public, like any blockchain transfer.</li>
+        <li>We don’t sell personal information.</li>
+      </ul>
+    </li>
+    <li>
+      <h2>The NAK token</h2>
+      <p>The NAK token is not an investment. It is not designed or intended to appreciate in value, and NAK makes no promise of profit, return or yield of any kind. Nothing on NAKSwap is financial, investment, legal or tax advice.</p>
+    </li>
+    <li>
+      <h2>No warranties</h2>
+      <p>NAKSwap is provided “as is” and “as available”, without warranties of any kind. Software, blockchains and third-party services can fail, contain errors or be attacked, and token prices can change quickly. We don’t promise that NAKSwap will be available, error-free or suited to your purposes, or any particular outcome or price.</p>
+    </li>
+    <li>
+      <h2>Limits on our liability</h2>
+      <p>To the fullest extent the law allows, NAK and the people who build and run NAKSwap are not liable for indirect, incidental, special, consequential or punitive damages, or for lost profits, data or value, arising from your use of NAKSwap. Our total liability for any claim about a swap is limited to the NAKSwap fee you paid for that swap. Some places don’t allow these limits, so they may not all apply to you.</p>
+    </li>
+    <li>
+      <h2>Your responsibility to us</h2>
+      <p>If you break these terms or the law while using NAKSwap and that leads to a claim against NAK, you agree to cover the reasonable costs and losses that result.</p>
+    </li>
+    <li>
+      <h2>Ownership</h2>
+      <p>The NAKSwap software, name and design belong to NAK (New Age Kapital). All rights reserved. Third-party names and logos belong to their owners and are used only to identify their services.</p>
+    </li>
+    <li>
+      <h2>Contact</h2>
+      <p>Questions or issues: Telegram <a href="https://t.me/NAKSTOKEN" target="_blank" rel="noopener">@NAKSTOKEN</a>. Include your order code if your question is about a swap. If any part of these terms can’t be enforced, the rest still applies.</p>
+    </li>
+  </ol>
+</main>
+
+<footer>&copy; 2026 NAK New Age Kapital. All rights reserved.</footer>
+</body>
+</html>

@@ -203,14 +203,14 @@ function limiter(max, windowMs) {
 const statusName = (s) => Object.keys(s)[0];
 
 function serveStatic(req, res, pathname) {
-  const rel = pathname === '/' ? 'index.html' : pathname === '/admin' || pathname === '/admin/' ? 'admin/index.html' : pathname.replace(/^\/+/, '');
+  const rel = pathname === '/' ? 'index.html' : pathname === '/admin' || pathname === '/admin/' ? 'admin/index.html' : pathname === '/terms' ? 'terms.html' : pathname.replace(/^\/+/, '');
   const isAdminPage = rel === 'admin/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return false;
   res.writeHead(200, {
     ...(isAdminPage ? ADMIN_HEADERS : SECURITY_HEADERS),
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': isAdminPage ? 'no-store' : rel === 'index.html' || rel.startsWith('admin/') ? 'no-cache' : 'public, max-age=300',
+    'Cache-Control': isAdminPage ? 'no-store' : rel === 'index.html' || rel === 'terms.html' || rel.startsWith('admin/') ? 'no-cache' : 'public, max-age=300',
   });
   fs.createReadStream(file)
     .on('error', () => res.destroy())

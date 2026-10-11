@@ -44,7 +44,7 @@ type Router =
    cancelUnfunded: (id: nat) -> (bool);
    checkLateDeposits: () -> (nat);
    clearHelper: (i: nat) -> (bool);
-   createOrder: (args: CreateOrderArgs) -> (Result_6);
+   createOrder: (args: CreateOrderArgs) -> (Result_7);
    feeStatus: () -> (FeeStatus) query;
    forcePayout: (id: nat, nakAmount: nat, fromDeposit: bool) -> (opt Status);
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
@@ -93,6 +93,7 @@ type Router =
    setHelpers: (list: vec principal, moduleHash: blob) -> (bool);
    setPaused: (paused: bool) -> (bool);
    sweepFees: () -> (nat);
+   sweepOrderDust: (id: nat) -> (Result_1);
    withdrawFromPool: (icpToken: bool, amount: nat) -> (Result);
  };
 type Role = 
@@ -103,7 +104,7 @@ type Role =
    none;
    operator;
  };
-type Result_6 = 
+type Result_7 = 
  variant {
    err: CreateOrderError;
    ok: OrderView;

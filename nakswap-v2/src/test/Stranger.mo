@@ -33,6 +33,11 @@ actor class Stranger() {
     await r.requestAudit(note);
   };
 
+  public func trySweepDust(router : Principal, id : Nat) : async Bool {
+    let r : actor { sweepOrderDust : (Nat) -> async { #ok : { icp : Nat; nak : Nat }; #err : Text } } = actor (router.toText());
+    switch (await r.sweepOrderDust(id)) { case (#ok _) { true }; case (#err _) { false } };
+  };
+
   public func tryLate(router : Principal) : async Nat {
     let r : RouterApi = actor (router.toText());
     await r.checkLateDeposits();

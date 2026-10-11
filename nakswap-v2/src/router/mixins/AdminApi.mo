@@ -468,6 +468,20 @@ mixin (
     #ok(sent);
   };
 
+  // Admin: move the dust left in a finished or expired order's deposit account to the stray
+  // account now, instead of when its late-deposit watch ends. A real payment (at or above
+  // the anti-dust floor) revives the order instead.
+  public shared ({ caller }) func sweepOrderDust(id : Nat) : async Result.Result<{ icp : Nat; nak : Nat }, Text> {
+    if (not Orders.isAdmin(state.config, caller)) { return #err("not authorized") };
+    let o = switch (orders.get(id)) { case (?o) { o }; case null { return #err("no such order") } };
+    switch (await* Engine.sweepDust(state, rt, active, self, o)) {
+      case (#swept s) { rt.lateWatch.remove(id); #ok(s) };
+      case (#revived) { #err("a payment is there: the order was reopened to swap or refund it") };
+      case (#notFinished) { #err("order is open, or its deposit account still holds a fee or helper funds") };
+      case (#failed) { #err("ledger busy or rejected the transfer; try again") };
+    };
+  };
+
   public query ({ caller }) func helpers() : async [Types.HelperInfo] {
     if (not canWatch(caller)) { return [] };
     rt.exec.helpers.map(func(h : Principal) : Types.HelperInfo = { helper = h; busy = rt.busyHelpers.contains(h); quarantined = rt.quarantined.contains(h); holdsOrder = rt.helperOrders.get(h) });

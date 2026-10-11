@@ -94,14 +94,18 @@ module {
     // Drop finished entries, then check the most overdue ones first: a checked entry goes to
     // the back of the queue, so every watched order gets its turn however many there are.
     let due = List.empty<(Nat, Int)>();
+    let ending = List.empty<Nat>();
     label scan for ((id, at) in rt.lateWatch.entries().toArray().values()) {
       let o = switch (orders.get(id)) {
         case (?o) { o };
         case null { rt.lateWatch.remove(id); continue scan };
       };
-      // Watched for 3 days after the order's own window closed.
+      // Watched for 3 days after the order's own window closed. Then any dust left in the
+      // deposit account goes to the stray account (below) and the watch ends.
       if (now > o.createdAt + cfg.orderTtlSeconds * 1_000_000_000 + Guard.lateWatchNanos) {
-        rt.lateWatch.remove(id);
+        if (dustSweepable(rt, o) and not rt.inFlight.contains(id)) { ending.add(id) } else if (not dustSweepable(rt, o)) {
+          rt.lateWatch.remove(id);
+        };
         continue scan;
       };
       switch (o.status) {
@@ -119,7 +123,23 @@ module {
       if (force or at <= now) { due.add((id, at)) };
     };
     let picked = due.toArray().sort(func(a : (Nat, Int), b : (Nat, Int)) : Order.Order = Int.compare(a.1, b.1));
-    for ((id, at) in picked.sliceToArray(0, Nat.min(picked.size(), Guard.lateChecksPerTick)).values()) {
+    let checks = Nat.min(picked.size(), Guard.lateChecksPerTick);
+    // Watches that ended share the per-tick budget with the checks.
+    var sweeps = Guard.lateChecksPerTick - checks : Nat;
+    label sweep for (id in ending.values()) {
+      if (sweeps == 0) { break sweep };
+      sweeps -= 1;
+      let o = switch (orders.get(id)) { case (?o) { o }; case null { rt.lateWatch.remove(id); continue sweep } };
+      switch (await* sweepDust(state, rt, active, self, o)) {
+        // Retried on later ticks; given up a day after the watch ended (the admin can still
+        // sweep it with sweepOrderDust).
+        case (#failed) {
+          if (Time.now() > o.createdAt + cfg.orderTtlSeconds * 1_000_000_000 + Guard.lateWatchNanos + 86_400_000_000_000) { rt.lateWatch.remove(id) };
+        };
+        case _ { rt.lateWatch.remove(id) };
+      };
+    };
+    for ((id, at) in picked.sliceToArray(0, checks).values()) {
       label one {
       let o = switch (orders.get(id)) { case (?o) { o }; case null { break one } };
       // Next check strictly after this one, so a checked entry always moves behind those
@@ -133,7 +153,7 @@ module {
         // Re-check after the await: an admin may have acted on it meanwhile.
         switch (o.status) {
           case (#expired or #completed _ or #refunded _) {
-            if (bal >= Nat.max(Guard.minDepositE8s, 2 * cfg.icpFee + 1)) {
+            if (bal >= minDeposit(cfg)) {
               rt.lateWatch.remove(id);
               switch (o.status) { case (#completed _ or #refunded _) { rt.revived.add(id) }; case _ {} };
               setStatus(o, active, #awaitingDeposit); // swapped or refunded by the worker
@@ -148,6 +168,65 @@ module {
       } finally { rt.inFlight.remove(id) };
       };
     };
+  };
+
+  // Smallest balance that counts as a payment (anti-dust floor).
+  public func minDeposit(cfg : Types.Config) : Nat { Nat.max(Guard.minDepositE8s, 2 * cfg.icpFee + 1) };
+
+  // A finished or expired order whose deposit account holds nothing that is owed to anyone
+  // (no fee waiting there, no payout from it, no funds with a helper).
+  func dustSweepable(rt : Types.Runtime, o : Order) : Bool {
+    switch (o.status) {
+      case (#expired or #completed _ or #refunded _) {
+        not (rt.subFees.containsKey(o.id) or rt.payFromSub.contains(o.id) or rt.jobFees.containsKey(o.id) or rt.helperOrders.values().any(func(i : Nat) : Bool = i == o.id));
+      };
+      case _ { false };
+    };
+  };
+
+  // Moves dust (below the anti-dust floor) from a finished or expired order's deposit
+  // account to the router's stray account, ICP and NAK. A payment at or above the floor
+  // revives the order instead (swapped or refunded as usual). Amounts at or below a ledger
+  // fee can't be moved and stay.
+  public func sweepDust(
+    state : Types.RouterState,
+    rt : Types.Runtime,
+    active : Set.Set<Nat>,
+    self : Principal,
+    o : Order,
+  ) : async* { #swept : { icp : Nat; nak : Nat }; #revived; #notFinished; #failed } {
+    let cfg = state.config;
+    if (not dustSweepable(rt, o)) { return #notFinished };
+    if (rt.inFlight.contains(o.id)) { return #failed };
+    rt.inFlight.add(o.id);
+    try {
+      let acct = { owner = self; subaccount = ?o.subaccount };
+      let stray = { owner = self; subaccount = ?Account.straySubaccount };
+      let bi = await icp(cfg).icrc1_balance_of(acct);
+      if (not dustSweepable(rt, o)) { return #notFinished }; // an admin acted meanwhile
+      if (bi >= minDeposit(cfg)) {
+        switch (o.status) { case (#completed _ or #refunded _) { rt.revived.add(o.id) }; case _ {} };
+        rt.lateWatch.remove(o.id);
+        setStatus(o, active, #awaitingDeposit);
+        return #revived;
+      };
+      var sentIcp = 0;
+      if (bi > cfg.icpFee) {
+        switch (await icp(cfg).icrc1_transfer({ from_subaccount = ?o.subaccount; to = stray; amount = bi - cfg.icpFee; fee = ?cfg.icpFee; memo = ?("NAKSWAP-DUST" : Blob); created_at_time = null })) {
+          case (#Ok _) { sentIcp := bi - cfg.icpFee };
+          case (#Err _) { return #failed };
+        };
+      };
+      let bn = await nak(cfg).icrc1_balance_of(acct);
+      var sentNak = 0;
+      if (bn > cfg.nakFee) {
+        switch (await nak(cfg).icrc1_transfer({ from_subaccount = ?o.subaccount; to = stray; amount = bn - cfg.nakFee; fee = ?cfg.nakFee; memo = ?("NAKSWAP-DUST" : Blob); created_at_time = null })) {
+          case (#Ok _) { sentNak := bn - cfg.nakFee };
+          case (#Err _) { return #failed };
+        };
+      };
+      #swept({ icp = sentIcp; nak = sentNak });
+    } catch (_) { #failed } finally { rt.inFlight.remove(o.id) };
   };
 
   // Every 10 minutes for the first 6 hours after the order's window closed, then hourly
@@ -249,8 +328,8 @@ module {
         };
         if (rt.inFlight.contains(id)) { return #busy };
 
-        // Dust (under 0.001 ICP, and never less than two ledger fees) isn't a payment.
-        if (bal < Nat.max(Guard.minDepositE8s, 2 * cfg.icpFee + 1)) {
+        // Dust (under 0.01 ICP, and never less than two ledger fees) isn't a payment.
+        if (bal < minDeposit(cfg)) {
           switch (order.houdiniId) {
             case null {
               // Never paired with a Houdini exchange: no one was told to pay, so drop it.

@@ -647,13 +647,28 @@ actor Test {
     let o9c = await newOrder(alice, null);
     check("an unpaid order can be cancelled by the relay", (await router.cancelUnfunded(o9c.id)) and statusTag(await statusOf(o9c.id)) == "expired");
     let o9d = await newOrder(alice, null);
-    await houdiniPays(o9d.depositAccountId, ICP / 1000);
+    await houdiniPays(o9d.depositAccountId, ICP / 100); // at the 0.01 ICP floor: a payment
     check("a funded order can't be cancelled", not (await router.cancelUnfunded(o9d.id)));
     let o9e = await newOrder(alice, null);
     ignore await router.attachHoudini(o9e.id, "icp-direct");
     await houdiniPays(o9e.depositAccountId, 50_000); // 0.0005 ICP of dust, e.g. address poisoning
     check("dust doesn't start a swap or refund", statusTag(await statusOf(o9e.id)) == "awaitingDeposit" and statusTag(switch (await router.poke(o9e.id)) { case (#processed st) { st }; case _ { #expired } }) == "awaitingDeposit");
     check("an order holding only dust can still be cancelled", (await router.cancelUnfunded(o9e.id)) and statusTag(await statusOf(o9e.id)) == "expired");
+    // Dust below the 0.01 ICP floor: never revives the order; the admin (or the end of the
+    // late-deposit watch) moves it to the router's stray account.
+    await houdiniPays(o9e.depositAccountId, 400_000); // 0.0045 ICP in all
+    ignore await router.checkLateDeposits();
+    check("0.0045 ICP doesn't revive an expired order", statusTag(await statusOf(o9e.id)) == "expired");
+    let strayAcctD = { owner = routerId; subaccount = ?Account.straySubaccount };
+    let strayBeforeD = await icp.icrc1_balance_of(strayAcctD);
+    check("dust sweep refused for an open order", switch (await router.sweepOrderDust(o9.id)) { case (#err _) { true }; case _ { false } });
+    check("stranger can't sweep dust", not (await stranger.trySweepDust(routerId, o9e.id)));
+    let sweptD = await router.sweepOrderDust(o9e.id);
+    check("admin sweeps the dust to the stray account (" # debug_show sweptD # ")", sweptD == #ok({ icp = 450_000 - icpFee; nak = 0 }) and (await icp.icrc1_balance_of(strayAcctD)) == strayBeforeD + 450_000 - icpFee);
+    check("the deposit account is empty and the order still expired", (await icp.icrc1_balance_of({ owner = routerId; subaccount = ?o9e.depositSubaccount })) == 0 and statusTag(await statusOf(o9e.id)) == "expired");
+    await houdiniPays(o9e.depositAccountId, ICP / 2);
+    check("a real payment revives it instead of being swept", switch (await router.sweepOrderDust(o9e.id)) { case (#err _) { statusTag(await statusOf(o9e.id)) == "awaitingDeposit" }; case _ { false } });
+    ignore await pokeUntilSettled(o9e.id);
     check("strangers can't cancel", not (await stranger.tryCancel(routerId, o9.id)));
 
     // Admin dashboard guardians.

@@ -133,7 +133,7 @@ module {
         // Re-check after the await: an admin may have acted on it meanwhile.
         switch (o.status) {
           case (#expired or #completed _ or #refunded _) {
-            if (bal > 2 * cfg.icpFee) {
+            if (bal > 2 * cfg.icpFee and bal >= Guard.lateMinDepositE8s) {
               rt.lateWatch.remove(id);
               switch (o.status) { case (#completed _ or #refunded _) { rt.revived.add(id) }; case _ {} };
               setStatus(o, active, #awaitingDeposit); // swapped or refunded by the worker

@@ -312,6 +312,9 @@ actor Test {
     await houdiniPays(o7c.depositAccountId, 15_000); // dust, less than a refund would cost
     ignore await router.checkLateDeposits();
     check("dust doesn't revive an order", statusTag(await statusOf(o7c.id)) == "expired");
+    await houdiniPays(o7c.depositAccountId, 60_000); // 0.00075 ICP in all: above 2 fees, still dust
+    ignore await router.checkLateDeposits();
+    check("dust above two fees doesn't revive it either", statusTag(await statusOf(o7c.id)) == "expired");
     check("stranger can't trigger late checks", (await (await Stranger.Stranger()).tryLate(routerId)) == 0);
     await houdiniPays(o7c.depositAccountId, ICP);
     ignore await router.checkLateDeposits();

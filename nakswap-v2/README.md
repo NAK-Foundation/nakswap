@@ -67,7 +67,7 @@ router re-checks the deposit account of expired, completed and refunded orders f
 the order's window closed: every 10 minutes for the first 6 hours, hourly until 24 hours, then
 every 6 hours (about 65 checks per order instead of 440), most overdue first, 10 checks per
 tick, at most 3,000 orders watched. A finished order is skipped while any of its NAKSwap fee is still
-in its account. ICP that turns up (more than two ledger fees) moves the order back to
+in its account. ICP that turns up (0.001 ICP or more; less is dust and stays put) moves the order back to
 `awaitingDeposit`, and the worker swaps it, or refunds it if it is now too small, too big, or
 below the order's guaranteed minimum. This covers late Houdini deliveries, direct payments
 after the window, and a second payment (e.g. the real one after a too-small test).

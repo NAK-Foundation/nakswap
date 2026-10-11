@@ -649,6 +649,11 @@ actor Test {
     let o9d = await newOrder(alice, null);
     await houdiniPays(o9d.depositAccountId, ICP / 1000);
     check("a funded order can't be cancelled", not (await router.cancelUnfunded(o9d.id)));
+    let o9e = await newOrder(alice, null);
+    ignore await router.attachHoudini(o9e.id, "icp-direct");
+    await houdiniPays(o9e.depositAccountId, 50_000); // 0.0005 ICP of dust, e.g. address poisoning
+    check("dust doesn't start a swap or refund", statusTag(await statusOf(o9e.id)) == "awaitingDeposit" and statusTag(switch (await router.poke(o9e.id)) { case (#processed st) { st }; case _ { #expired } }) == "awaitingDeposit");
+    check("an order holding only dust can still be cancelled", (await router.cancelUnfunded(o9e.id)) and statusTag(await statusOf(o9e.id)) == "expired");
     check("strangers can't cancel", not (await stranger.tryCancel(routerId, o9.id)));
 
     // Admin dashboard guardians.

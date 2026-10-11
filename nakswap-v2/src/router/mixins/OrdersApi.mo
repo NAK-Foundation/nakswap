@@ -85,7 +85,7 @@ mixin (
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
       switch (o.status) {
         case (#awaitingDeposit) {
-          if (bal <= 2 * state.config.icpFee) { // dust isn't a payment
+          if (bal < Nat.max(Guard.minDepositE8s, 2 * state.config.icpFee + 1)) { // dust isn't a payment
             // Kept as #expired (frees the open-order slot; reopen / recoverDeposit still work
             // if Houdini delivers after all).
             Engine.expire(rt, o, active);

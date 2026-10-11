@@ -133,7 +133,7 @@ module {
         // Re-check after the await: an admin may have acted on it meanwhile.
         switch (o.status) {
           case (#expired or #completed _ or #refunded _) {
-            if (bal > 2 * cfg.icpFee and bal >= Guard.lateMinDepositE8s) {
+            if (bal >= Nat.max(Guard.minDepositE8s, 2 * cfg.icpFee + 1)) {
               rt.lateWatch.remove(id);
               switch (o.status) { case (#completed _ or #refunded _) { rt.revived.add(id) }; case _ {} };
               setStatus(o, active, #awaitingDeposit); // swapped or refunded by the worker
@@ -249,8 +249,8 @@ module {
         };
         if (rt.inFlight.contains(id)) { return #busy };
 
-        // Dust (at most two ledger fees) isn't a payment: it couldn't even pay for a refund.
-        if (bal <= 2 * cfg.icpFee) {
+        // Dust (under 0.001 ICP, and never less than two ledger fees) isn't a payment.
+        if (bal < Nat.max(Guard.minDepositE8s, 2 * cfg.icpFee + 1)) {
           switch (order.houdiniId) {
             case null {
               // Never paired with a Houdini exchange: no one was told to pay, so drop it.

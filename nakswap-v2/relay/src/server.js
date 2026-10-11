@@ -51,7 +51,14 @@ const orderLimitPerHour = Number(env.ORDER_LIMIT_PER_HOUR) > 0 ? Number(env.ORDE
 const maxQuoteImpactBps = Number(env.MAX_QUOTE_IMPACT_BPS) > 0 ? Number(env.MAX_QUOTE_IMPACT_BPS) : null;
 // Optional: the site's own domain (e.g. swap.example.com). Other host names redirect there.
 const canonicalHost = /^[a-z0-9.-]{3,253}$/.test(String(env.CANONICAL_HOST || '').toLowerCase()) ? String(env.CANONICAL_HOST).toLowerCase() : null;
-const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, maxQuoteImpactBps, canonicalHost, log: (...a) => console.log(new Date().toISOString(), ...a) });
+// Optional origin lock (Cloudflare in front): requests without this value in x-origin-secret
+// are refused, except /api/health. At least 32 characters; unset = off.
+const originSecret = String(env.ORIGIN_SECRET || '');
+if (originSecret && originSecret.length < 32) {
+  console.error('ORIGIN_SECRET must be at least 32 characters. Refusing to start.');
+  process.exit(1);
+}
+const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, maxQuoteImpactBps, canonicalHost, originSecret: originSecret || null, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
 const server = http.createServer((req, res) =>
   handle(req, res).catch((e) => {
@@ -65,10 +72,13 @@ server.headersTimeout = 10_000;
 server.requestTimeout = 30_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 50;
+// Hard ceiling on open connections (a flood gets refused at the socket, not queued).
+server.maxConnections = Number(env.MAX_CONNECTIONS) > 0 ? Number(env.MAX_CONNECTIONS) : 2_000;
 server.listen(port, () => {
   console.log(`nakswap relay on :${port}`);
   console.log(`  ic host:   ${host}`);
   console.log(`  houdini:   ${houdini.mode}${houdini.ready === false ? ' (API key missing)' : ''}`);
   console.log(`  router:    ${ic.routerId ?? 'not deployed yet'}${ic.routerError ? ` (error: ${ic.routerError})` : ''}`);
   console.log(`  operator:  ${ic.principal}  <- must be in the router's operators list`);
+  console.log(`  origin lock: ${originSecret ? 'on (Cloudflare only)' : 'off'}`);
 });

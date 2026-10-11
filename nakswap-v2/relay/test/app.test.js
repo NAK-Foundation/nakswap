@@ -498,3 +498,69 @@ test('token search abuse from one visitor cannot take the token list down for ev
     close();
   }
 });
+
+test('attack surface: methods, sizes, origin lock, concurrency caps', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const secret = 's'.repeat(40);
+  const server = http.createServer(createApp({ houdini, ic, originSecret: secret, maxInFlight: 3, maxInFlightPerIp: 2 }));
+  await new Promise((r) => server.listen(0, r));
+  const port = server.address().port;
+  const H = 'swap.example.org';
+  const cf = (ip, extra = {}) => ({ 'x-origin-secret': secret, 'cf-connecting-ip': ip, ...extra });
+  try {
+    // Origin lock: without the secret only health answers; a wrong secret is refused too.
+    assert.equal((await rawCall(port, 'GET', '/', H)).code, 403);
+    assert.equal((await rawCall(port, 'GET', '/api/tokens', H, undefined, { 'x-origin-secret': 'x'.repeat(40) })).code, 403);
+    assert.equal((await rawCall(port, 'GET', '/api/health', H)).code, 200);
+    assert.equal((await rawCall(port, 'GET', '/', H, undefined, cf('198.51.100.1'))).code, 200);
+    assert.equal((await rawCall(port, 'HEAD', '/', H, undefined, cf('198.51.100.1'))).code, 200);
+    // Methods: no OPTIONS / PUT / DELETE; no HEAD on API calls that do work.
+    for (const m of ['OPTIONS', 'PUT', 'DELETE', 'PATCH', 'TRACE']) {
+      const r = await rawCall(port, m, '/api/orders', H, undefined, cf('198.51.100.1', { 'content-length': '0' }));
+      assert.equal(r.code, 405, m);
+      assert.equal(r.headers['access-control-allow-origin'], undefined);
+    }
+    assert.equal((await rawCall(port, 'HEAD', '/api/tokens', H, undefined, cf('198.51.100.1'))).code, 405);
+    // Oversized URL and declared body are refused before any work.
+    assert.equal((await rawCall(port, 'GET', `/api/tokens?term=${'a'.repeat(3000)}`, H, undefined, cf('198.51.100.1'))).code, 414);
+    assert.equal((await rawCall(port, 'POST', '/api/quote', H, undefined, cf('198.51.100.1', { 'content-length': '50000' }))).code, 413);
+    // Client IP comes from CF-Connecting-IP when the secret is valid: one visitor's order
+    // limit doesn't block another behind the same Cloudflare edge address.
+    const q1 = await rawCall(port, 'POST', '/api/quote', H, { fromId: 'mock-usdt', amount: '100' }, cf('198.51.100.2'));
+    assert.equal(q1.code, 200);
+    // Concurrency: slow upstream calls beyond the caps are turned away quickly.
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const realSearch = houdini.searchTokens.bind(houdini);
+    houdini.searchTokens = async (...a) => { await gate; return realSearch(...a); };
+    const same = [1, 2, 3].map((i) => rawCall(port, 'GET', `/api/tokens?term=s${i}`, H, undefined, cf('198.51.100.3')));
+    await new Promise((r) => setTimeout(r, 50));
+    const other = [4, 5].map((i) => rawCall(port, 'GET', `/api/tokens?term=o${i}`, H, undefined, cf(`198.51.100.${10 + i}`)));
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    const codes = (await Promise.all([...same, ...other])).map((r) => r.code);
+    assert.deepEqual(codes.slice(0, 3).sort(), [200, 200, 429], 'one visitor: at most 2 at once');
+    assert.ok(codes.slice(3).includes(503), 'site-wide: at most 3 at once');
+    // Caps release afterwards.
+    assert.equal((await rawCall(port, 'GET', '/api/tokens?term=after', H, undefined, cf('198.51.100.3'))).code, 200);
+  } finally {
+    server.close();
+  }
+});
+
+test('without the origin lock, Cloudflare headers are ignored (no IP spoofing)', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic }));
+  try {
+    const q = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' });
+    let last;
+    for (let i = 0; i < 7; i++) {
+      last = await call('POST', '/api/orders', { quoteId: q.body.routes[0].quoteId, recipient: ALICE }, { 'cf-connecting-ip': `10.9.0.${i}`, 'x-origin-secret': 'guess' });
+    }
+    assert.equal(last.code, 429);
+  } finally {
+    close();
+  }
+});

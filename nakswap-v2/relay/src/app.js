@@ -115,10 +115,14 @@ const readBody = (req) =>
 
 // Client IP. Railway's edge sets X-Real-IP; the left end of X-Forwarded-For is whatever the
 // client typed, so it is never trusted (it would let anyone dodge the rate limits).
-function userContext(req) {
+// Behind Cloudflare with the origin lock on (see ORIGIN_SECRET), X-Real-IP is a Cloudflare
+// address, so the visitor's IP comes from CF-Connecting-IP — trusted only on requests that
+// carried the origin secret, i.e. that really came through Cloudflare.
+function userContext(req, viaCloudflare = false) {
+  const cf = viaCloudflare ? req.headers['cf-connecting-ip'] : undefined;
   const real = req.headers['x-real-ip'];
   const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const ip = (typeof real === 'string' && real.trim()) || fwd[fwd.length - 1] || req.socket?.remoteAddress || '0.0.0.0';
+  const ip = (typeof cf === 'string' && cf.trim()) || (typeof real === 'string' && real.trim()) || fwd[fwd.length - 1] || req.socket?.remoteAddress || '0.0.0.0';
   const tz = String(req.headers['x-user-timezone'] || 'UTC');
   // IPv6 clients usually control a whole /64, so limit per /64 rather than per address.
   const key = ip.includes(':') && !ip.includes('.') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : ip;
@@ -246,7 +250,40 @@ export function createApp({
   // Once the site has its own domain: every other host name (e.g. the railway.app one) is
   // sent there, so there is one site and one admin origin. /api/health stays for Railway.
   canonicalHost = null,
+  // Optional origin lock: when set, every request except /api/health must carry this value in
+  // the x-origin-secret header (added by a Cloudflare request-header rule), so the Railway
+  // address can't be hit directly to get around Cloudflare's protection.
+  originSecret = null,
+  // Requests that call out to Houdini or the IC, at once: site-wide and per visitor. Past
+  // that, new ones get a quick "busy" instead of piling up behind slow upstream calls.
+  maxInFlight = 64,
+  maxInFlightPerIp = 6,
 }) {
+  const originDigest = originSecret ? crypto.createHash('sha256').update(String(originSecret)).digest() : null;
+  const fromCloudflare = (req) => {
+    const v = req.headers['x-origin-secret'];
+    if (!originDigest || typeof v !== 'string') return false;
+    return crypto.timingSafeEqual(crypto.createHash('sha256').update(v).digest(), originDigest);
+  };
+  let inFlight = 0;
+  const inFlightByIp = new Map();
+  // Runs a handler that calls out (Houdini / IC) under the concurrency caps.
+  async function upstream(res, user, fn) {
+    const mine = inFlightByIp.get(user.ip) || 0;
+    if (mine >= maxInFlightPerIp) return json(res, 429, { error: 'too many requests at once, slow down' });
+    if (inFlight >= maxInFlight) return json(res, 503, { error: 'NAKSwap is very busy right now. Please try again in a moment.' });
+    inFlight += 1;
+    inFlightByIp.set(user.ip, mine + 1);
+    try {
+      const [code, body] = await fn();
+      return json(res, code, body);
+    } finally {
+      inFlight -= 1;
+      const left = (inFlightByIp.get(user.ip) || 1) - 1;
+      if (left > 0) inFlightByIp.set(user.ip, left);
+      else inFlightByIp.delete(user.ip);
+    }
+  }
   // The price-impact line quotes must stay under: the router's refund line minus a margin,
   // or the configured limit if that is lower.
   const quoteImpactCap = () => {
@@ -763,21 +800,38 @@ export function createApp({
     } catch {
       return json(res, 400, { error: 'bad request' });
     }
-    const user = userContext(req);
+    // Origin lock: only Cloudflare (which adds the secret) gets past this. Health stays open
+    // for Railway's own checks.
+    const viaCloudflare = fromCloudflare(req);
+    if (originDigest && !viaCloudflare && url.pathname !== '/api/health') {
+      res.writeHead(403, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      return res.end('forbidden');
+    }
+    // Only what the site uses: GET and POST (HEAD for pages). No OPTIONS: the API is same-origin
+    // only and has no CORS.
+    const isApi = url.pathname.startsWith('/api/');
+    const methodOk = req.method === 'GET' || req.method === 'POST' || (req.method === 'HEAD' && (!isApi || url.pathname === '/api/health'));
+    if (!methodOk) {
+      res.writeHead(405, { ...SECURITY_HEADERS, Allow: 'GET, POST', 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end('{"error":"method not allowed"}');
+    }
+    if (req.url.length > 2_048) return json(res, 414, { error: 'URL too long' });
+    if (req.method === 'POST' && Number(req.headers['content-length']) > 8_192) {
+      // Refused unread, so the connection is closed rather than left holding the body.
+      res.writeHead(413, { ...SECURITY_HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Connection: 'close' });
+      return res.end('{"error":"body too large"}');
+    }
+    const user = userContext(req, viaCloudflare);
     const host = String(req.headers.host || '').toLowerCase();
     if (canonicalHost && host && host !== canonicalHost && url.pathname !== '/api/health' && (req.method === 'GET' || req.method === 'HEAD')) {
       res.writeHead(301, { ...SECURITY_HEADERS, Location: `https://${canonicalHost}${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
       return res.end();
     }
     try {
-      if (req.method === 'OPTIONS') {
-        res.writeHead(204, SECURITY_HEADERS);
-        return res.end();
-      }
       if (req.method === 'POST' && !String(req.headers['content-type'] || '').startsWith('application/json')) {
         return json(res, 415, { error: 'send JSON' });
       }
-      if (req.method === 'GET' && url.pathname === '/api/health') {
+      if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/api/health') {
         const cfg = ic.config;
         const rh = ic.routerHealth;
         const icpUsd = prices.icpUsd ?? null;
@@ -814,30 +868,29 @@ export function createApp({
       if (req.method === 'GET' && url.pathname === '/api/tokens') {
         if (!allowTokens(user.ip)) return json(res, 429, { error: 'too many requests, slow down' });
         const term = (url.searchParams.get('term') || '').slice(0, 40);
-        return json(res, 200, { tokens: await tokens(term, user) });
+        return await upstream(res, user, async () => [200, { tokens: await tokens(term, user) }]);
       }
       if (req.method === 'POST' && url.pathname === '/api/quote') {
-        const [code, body] = await quote(await readBody(req), user);
-        return json(res, code, body);
+        const body = await readBody(req);
+        return await upstream(res, user, () => quote(body, user));
       }
       if (req.method === 'POST' && url.pathname === '/api/quote-icp') {
-        const [code, body] = await quoteIcp(await readBody(req), user);
-        return json(res, code, body);
+        const body = await readBody(req);
+        return await upstream(res, user, () => quoteIcp(body, user));
       }
       if (req.method === 'GET' && url.pathname === '/api/stats') {
         if (!allowView(user.ip)) return json(res, 429, { error: 'too many requests, slow down' });
-        return json(res, 200, await stats());
+        return await upstream(res, user, async () => [200, await stats()]);
       }
       if (req.method === 'POST' && url.pathname === '/api/orders') {
-        const [code, body] = await createOrder(await readBody(req), user);
-        return json(res, code, body);
+        const body = await readBody(req);
+        return await upstream(res, user, () => createOrder(body, user));
       }
       const m = url.pathname.match(/^\/api\/orders\/(\d+)$/);
       if (req.method === 'GET' && m) {
-        const [code, body] = await getOrder(m[1], req.headers['x-order-key'], user);
-        return json(res, code, body);
+        return await upstream(res, user, () => getOrder(m[1], req.headers['x-order-key'], user));
       }
-      if (req.method === 'GET' && !url.pathname.startsWith('/api/') && serveStatic(req, res, url.pathname)) return;
+      if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/') && serveStatic(req, res, url.pathname)) return;
       return json(res, 404, { error: 'not found' });
     } catch (e) {
       // Error text can echo addresses or principals back; mask anything that looks like one.

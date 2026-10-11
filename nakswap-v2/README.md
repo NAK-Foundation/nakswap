@@ -340,14 +340,17 @@ orders and swaps; payouts and refunds already under way still finish.
 - **Dashboard guardian compromised**: it can only freeze/unfreeze, run recovery and request
   audits. `router-admin.mjs remove-guardian <principal>`.
 - The 2-hourly monitor (`scripts/monitor.mjs`) raises a critical alert if any canister's code
-  or controllers change, if the admin, operators, fee or limits change, or if the site points
-  at a different router or operator.
+  or controllers change, if the admin, operators, fee or limits change, if the site points
+  at a different router or operator, or if the live pages (`/`, `/terms`, `/admin`,
+  `/admin/app.js`) differ from the repo's files (re-checked once after 90 s to allow for a
+  deploy).
 
 ## Moving to a custom domain
 
-- Railway: add the domain to the relay service; keep the DNS record **DNS-only** (no
-  Cloudflare proxy). The relay takes the visitor IP from Railway's `X-Real-IP`; behind a
-  proxy every visitor would share the proxy's IP (rate limits and Houdini's `x-user-ip`).
+- Railway: add the domain to the relay service. Either keep the DNS record **DNS-only**, or
+  put Cloudflare's proxy in front **with the origin lock** (next section). Never proxy
+  without the lock: every visitor would then share Cloudflare's IP (rate limits and Houdini's
+  `x-user-ip`), and the Railway address would still bypass Cloudflare.
 - Set `CANONICAL_HOST=<the domain>` on Railway: every other host name (the `railway.app` one)
   then redirects there, so there's one site and one admin origin. `/api/health` is exempt.
 - Admin dashboard: Internet Identity gives each site its own principal. Sign in at
@@ -356,6 +359,32 @@ orders and swaps; payouts and refunds already under way still finish.
 - Update `RELAY_URL` for `scripts/monitor.mjs` (and the scheduled monitor task).
 - DNS hygiene: a CAA record for the certificate authority Railway uses (Let's Encrypt), and
   for a domain that sends no mail, SPF `-all` and DMARC `p=reject`.
+
+## Cloudflare in front (optional origin lock)
+
+Puts Cloudflare's DDoS protection, WAF and rate limiting in front of the relay and makes the
+Railway address refuse everything that didn't come through Cloudflare.
+
+1. Cloudflare DNS: the domain's record **Proxied** (orange cloud); SSL/TLS mode **Full**
+   (Railway's guidance: not Flexible, not Full (Strict)).
+2. Generate a random secret of at least 32 characters (e.g. `openssl rand -hex 32`).
+3. Cloudflare → Rules → Transform Rules → **Modify Request Header**: for all incoming
+   requests, *set static* header `x-origin-secret` = the secret.
+4. Railway → relay → Variables: `ORIGIN_SECRET` = the same secret (seal it), and
+   `CANONICAL_HOST` = the domain. Redeploy.
+5. Check: `https://<domain>/` loads; `https://relay-production-….up.railway.app/` answers
+   `403 forbidden` (only `/api/health` stays open, for Railway's health check).
+6. Cloudflare → Speed / Scrape Shield: turn **off** Rocket Loader, Email Obfuscation, Auto
+   Minify and any HTML rewriting or injected analytics. They change the page, which breaks
+   its script hash (CSP) and trips the monitor's page check.
+7. Optional Cloudflare rate-limiting rule for `/api/` (the relay's own limits stay on).
+
+With the lock on, the visitor IP comes from `CF-Connecting-IP`, trusted only on requests
+carrying the secret. To rotate it: set the new value in Cloudflare and Railway together.
+Without `ORIGIN_SECRET` (the default) Cloudflare headers are ignored.
+
+Alternative with no public Railway address at all: a Cloudflare Tunnel (`cloudflared`) as a
+second Railway service on the private network, and the relay's public domain removed.
 
 ## Abuse and cycle-drain protection
 
@@ -389,7 +418,12 @@ Router (`src/router/main.mo`, `lib/Guard.mo`):
   `attachHoudini` is set-once; the router can't be its own recipient.
 
 Relay (`relay/src/app.js`, `server.js`):
-- Client IP from Railway's `X-Real-IP` (the left end of `X-Forwarded-For` is client-controlled).
+- Client IP from Railway's `X-Real-IP` (the left end of `X-Forwarded-For` is client-controlled),
+  or from `CF-Connecting-IP` when the origin lock is on and the request carried the secret.
+- Only GET and POST (HEAD for pages and health); everything else, including OPTIONS, is 405.
+  URLs over 2 KB are 414; a declared body over 8 KB is 413 before it is read.
+- At most 64 requests that call out to Houdini or the IC at once, 6 per visitor; past that a
+  quick 503 / 429 instead of a pile-up. At most 2,000 open connections (`MAX_CONNECTIONS`).
 - Orders: 5 per IP per 10 min, 150 per hour overall (`ORDER_LIMIT_PER_HOUR` on Railway to change it). Quotes (Houdini and ICP) 30/min per IP and
   1,200/hour overall, cached 20 s; a used quote is never served again from the cache. Limiter,
   cache and quote-registry memory is bounded (the registry drops its oldest entries, never all).

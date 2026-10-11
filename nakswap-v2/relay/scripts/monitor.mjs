@@ -205,6 +205,38 @@ else {
   if (!EXPECT.operators.includes(relay.operator)) add('crit', `Swap site uses an unexpected operator: ${relay.operator ?? 'none'}`);
 }
 
+// The pages the site serves must be byte-for-byte this checkout's files: a changed swap page
+// (e.g. fake deposit addresses after a hosting-account takeover) shows up here even when
+// nothing changed on GitHub. A deploy in progress can differ for a minute or two, so a
+// mismatch is re-checked once before it counts.
+const PAGES = { '/': 'index.html', '/terms': 'terms.html', '/admin': 'admin/index.html', '/admin/app.js': 'admin/app.js' };
+const pageSha = async (route) => {
+  const r = await fetch(`${RELAY}${route}`, { signal: AbortSignal.timeout(15_000), headers: { 'cache-control': 'no-cache' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return crypto.createHash('sha256').update(Buffer.from(await r.arrayBuffer())).digest('hex');
+};
+const localSha = (f) => crypto.createHash('sha256').update(fs.readFileSync(path.join(here, '..', 'public', f))).digest('hex');
+const pageCheck = async () => {
+  const bad = [];
+  for (const [route, f] of Object.entries(PAGES)) {
+    try {
+      if ((await pageSha(route)) !== localSha(f)) bad.push(route);
+    } catch {
+      bad.push(`${route} (unreachable)`);
+    }
+  }
+  return bad;
+};
+if (relay) {
+  let bad = await pageCheck();
+  if (bad.length) {
+    await new Promise((r) => setTimeout(r, 90_000));
+    bad = await pageCheck();
+  }
+  integrity.pages = bad.length ? { differ: bad } : 'match';
+  if (bad.length) add('crit', `Swap site pages differ from the repo: ${bad.join(', ')}. If no deploy is running, the site may have been tampered with; pause the router and check Railway.`);
+}
+
 const level = alerts.some((a) => a.level === 'crit') ? 'crit' : alerts.some((a) => a.level === 'warn') ? 'warn' : 'ok';
 const out = {
   at: new Date().toISOString(),

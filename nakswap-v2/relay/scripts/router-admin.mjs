@@ -19,6 +19,7 @@
 //   ... recover-stray <principal>     (the stray account: tokens strangers sent to helpers, and
 //                                      dust swept from deposit accounts; sends it all to <principal>)
 //   ... sweep-dust <id>               (move a finished/expired order's dust to the stray account now)
+//   ... dust-payout [<principal>|off <icp>]  (show / set the automatic stray-account payout)
 //   ... add-guardian <principal>      (admin dashboard sign-in: watch, freeze/unfreeze, request audits)
 //   ... remove-guardian <principal> | guardians | audits
 //   ... late-check                    (check expired orders for ICP that arrived late, now)
@@ -98,6 +99,8 @@ const healthIdl = ({ IDL }) =>
     publicStats: IDL.Func([], [IDL.Record({ swaps: IDL.Nat, icpSwapped: IDL.Nat, nakDelivered: IDL.Nat, lateWatched: IDL.Nat })], ['query']),
     recoverStray: IDL.Func([IDL.Principal], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     sweepOrderDust: IDL.Func([IDL.Nat], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
+    setDustPayout: IDL.Func([IDL.Opt(IDL.Principal), IDL.Nat], [IDL.Bool], []),
+    dustPayoutInfo: IDL.Func([], [IDL.Record({ to: IDL.Opt(IDL.Principal), minIcp: IDL.Nat })], ['query']),
     poolUnusedBalance: IDL.Func([], [IDL.Variant({ ok: IDL.Record({ icp: IDL.Nat, nak: IDL.Nat }), err: IDL.Text })], []),
     withdrawFromPool: IDL.Func([IDL.Bool, IDL.Nat], [IDL.Variant({ ok: IDL.Nat, err: IDL.Text })], []),
     setHelpers: IDL.Func([IDL.Vec(IDL.Principal), IDL.Vec(IDL.Nat8)], [IDL.Bool], []),
@@ -222,6 +225,14 @@ if (cmd === 'health') {
 } else if (cmd === 'recover-stray') {
   const r = await router.recoverStray(Principal.fromText(a));
   console.log('ok' in r ? `recovered ${Number(r.ok.icp) / 1e8} ICP and ${Number(r.ok.nak) / 1e8} NAK` : r.err);
+} else if (cmd === 'dust-payout') {
+  if (a) {
+    const to = a === 'off' ? [] : [Principal.fromText(a)];
+    const min = BigInt(Math.round(Number(b) * 1e8));
+    console.log('setDustPayout', await router.setDustPayout(to, min));
+  }
+  const d = await router.dustPayoutInfo();
+  console.log({ to: d.to[0]?.toText() ?? 'off', minIcp: Number(d.minIcp) / 1e8 });
 } else if (cmd === 'sweep-dust') {
   const r = await router.sweepOrderDust(BigInt(a));
   console.log('ok' in r ? `moved ${Number(r.ok.icp) / 1e8} ICP and ${Number(r.ok.nak) / 1e8} NAK to the stray account` : r.err);

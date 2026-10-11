@@ -170,6 +170,26 @@ module {
     };
   };
 
+  // Pays the stray account out to the configured wallet once it holds at least the set
+  // amount of ICP (the NAK there goes along). Nothing in the stray account belongs to an
+  // order: it's dust swept at the end of late-deposit watches and tokens strangers sent to
+  // helpers. A second run right after finds an empty account, so nothing is sent twice.
+  public func payoutStray(state : Types.RouterState, rt : Types.Runtime, self : Principal) : async* () {
+    let to = switch (rt.dustPayout.to) { case (?p) { p }; case null { return } };
+    if (Cycles.balance() < Guard.criticalCycles) { return };
+    let cfg = state.config;
+    let stray = { owner = self; subaccount = ?Account.straySubaccount };
+    try {
+      let bi = await icp(cfg).icrc1_balance_of(stray);
+      if (bi < rt.dustPayout.minIcp or bi <= cfg.icpFee) { return };
+      ignore await icp(cfg).icrc1_transfer({ from_subaccount = ?Account.straySubaccount; to = { owner = to; subaccount = null }; amount = bi - cfg.icpFee; fee = ?cfg.icpFee; memo = ?("NAKSWAP-DUST" : Blob); created_at_time = null });
+      let bn = await nak(cfg).icrc1_balance_of(stray);
+      if (bn > cfg.nakFee) {
+        ignore await nak(cfg).icrc1_transfer({ from_subaccount = ?Account.straySubaccount; to = { owner = to; subaccount = null }; amount = bn - cfg.nakFee; fee = ?cfg.nakFee; memo = ?("NAKSWAP-DUST" : Blob); created_at_time = null });
+      };
+    } catch (_) {};
+  };
+
   // Smallest balance that counts as a payment (anti-dust floor).
   public func minDeposit(cfg : Types.Config) : Nat {
     Nat.max(Nat.min(Guard.minDepositE8s, cfg.minOrderIcp / 2), 2 * cfg.icpFee + 1);

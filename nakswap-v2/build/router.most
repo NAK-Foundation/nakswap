@@ -85,6 +85,7 @@ type SubFee__219914591 =
 actor {
   stable active :
     {var root : Node__620761243<Nat>; var size : Nat__227979830};
+  stable dustPayout : {var minIcp : Nat; var to : ?Principal};
   stable exec : {var helpers : [Principal]};
   stable fees :
     {

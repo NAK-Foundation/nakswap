@@ -41,6 +41,8 @@ const EXPECT = {
   admin: process.env.EXPECT_ADMIN || ADMIN_PID,
   operators: list(process.env.EXPECT_OPERATORS, 'cih3k-q7hz3-6sleb-2m76m-ebrtd-qw7jo-wwnde-62a3t-by36t-a6hmp-2ae'),
   feeTo: process.env.EXPECT_FEE_TO || ADMIN_PID,
+  // Where the stray account (dust) is paid out automatically.
+  dustTo: process.env.EXPECT_DUST_TO || 'ttfax-iely3-bkfh4-tb7o3-dso2i-acf6j-yh6w5-jclgp-7mnhg-lxbzi-qae',
   feeBps: Number(process.env.EXPECT_FEE_BPS || 100),
   maxOrderIcp: Number(process.env.EXPECT_MAX_ORDER_ICP || 50),
   // Safety limits a stolen admin key could loosen.
@@ -142,7 +144,7 @@ for (const [i, id] of HELPERS.entries()) {
   }
 }
 const [si, sn] = await Promise.all([icp.icrc1_balance_of({ owner: ROUTER, subaccount: [STRAY] }), nak.icrc1_balance_of({ owner: ROUTER, subaccount: [STRAY] })]);
-if (si > 10_000n || sn > 1_000_000n) add('info', `Stray funds set aside from helpers: ${Number(si) / 1e8} ICP, ${Number(sn) / 1e8} NAK`);
+if (si > 10_000n || sn > 1_000_000n) add('info', `Stray account (dust, paid out automatically at the threshold): ${Number(si) / 1e8} ICP, ${Number(sn) / 1e8} NAK`);
 
 // ---- integrity: code, controllers, settings (a compromise shows up here first) ----
 const integrity = {};
@@ -166,17 +168,21 @@ try {
       return IDL.Service({
         getConfig: svc._fields.find(([n]) => n === 'getConfig')[1],
         feeStatus: IDL.Func([], [IDL.Record({ bps: IDL.Nat, to: IDL.Principal })], ['query']),
+        dustPayoutInfo: IDL.Func([], [IDL.Record({ to: IDL.Opt(IDL.Principal), minIcp: IDL.Nat })], ['query']),
       });
     },
     { agent, canisterId: ROUTER },
   );
   const cfg = await cfgActor.getConfig();
   const fee = await cfgActor.feeStatus();
+  const dust = await cfgActor.dustPayoutInfo();
   integrity.config = {
     admin: cfg.admin.toText(),
     operators: cfg.operators.map((p) => p.toText()).sort(),
     feeTo: fee.to.toText(),
     feeBps: Number(fee.bps),
+    dustTo: dust.to[0]?.toText() ?? null,
+    dustMinIcp: Number(dust.minIcp) / 1e8,
     maxOrderIcp: Number(cfg.maxOrderIcp) / 1e8,
     minOrderIcp: Number(cfg.minOrderIcp) / 1e8,
     slippageBps: Number(cfg.slippageBps),
@@ -189,6 +195,7 @@ try {
   if (integrity.config.admin !== EXPECT.admin) add('crit', `Router admin changed to ${integrity.config.admin}`);
   if (JSON.stringify(integrity.config.operators) !== JSON.stringify(EXPECT.operators)) add('crit', `Router operators changed: ${integrity.config.operators.join(', ')}`);
   if (integrity.config.feeTo !== EXPECT.feeTo || integrity.config.feeBps !== EXPECT.feeBps) add('crit', `Fee changed: ${integrity.config.feeBps / 100}% to ${integrity.config.feeTo}`);
+  if (c.dustTo !== EXPECT.dustTo) add('crit', `Dust payout wallet changed to ${c.dustTo ?? 'none'}`);
   if (integrity.config.maxOrderIcp !== EXPECT.maxOrderIcp) add('warn', `Max order changed to ${integrity.config.maxOrderIcp} ICP`);
 } catch {
   add('warn', 'Could not read router settings');

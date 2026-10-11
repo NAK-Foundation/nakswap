@@ -670,6 +670,22 @@ actor Test {
     await houdiniPays(o9e.depositAccountId, ICP / 2);
     check("a real payment revives it instead of being swept", switch (await router.sweepOrderDust(o9e.id)) { case (#err _) { statusTag(await statusOf(o9e.id)) == "awaitingDeposit" }; case _ { false } });
     ignore await pokeUntilSettled(o9e.id);
+    // Automatic payout of the stray account to the admin's dust wallet.
+    let dustW = Principal.fromBlob("\0B\0D");
+    check("dust wallet can't be the pool or the router", not (await router.setDustPayout(?poolId, ICP / 8)) and not (await router.setDustPayout(?routerId, ICP / 8)));
+    check("dust wallet set, 0.125 ICP threshold", (await router.setDustPayout(?dustW, ICP / 8)) and (await router.dustPayoutInfo()).minIcp == ICP / 8);
+    let strayNow = await icp.icrc1_balance_of(strayAcctD);
+    if (strayNow >= ICP / 8) { ignore await router.recoverStray(alice) }; // start from a small balance
+    ignore await icp.mint(strayAcctD, ICP / 20);
+    await router.runRecovery();
+    check("below 0.125 ICP: nothing sent", (await icp.icrc1_balance_of({ owner = dustW; subaccount = null })) == 0);
+    ignore await icp.mint(strayAcctD, ICP / 10);
+    let strayFull = await icp.icrc1_balance_of(strayAcctD);
+    await router.runRecovery();
+    check("at 0.125 ICP or more: all of it goes to the dust wallet", (await icp.icrc1_balance_of({ owner = dustW; subaccount = null })) == strayFull - icpFee and (await icp.icrc1_balance_of(strayAcctD)) == 0);
+    await router.runRecovery();
+    check("nothing sent twice", (await icp.icrc1_balance_of({ owner = dustW; subaccount = null })) == strayFull - icpFee);
+    ignore await router.setDustPayout(null, ICP / 8);
     check("strangers can't cancel", not (await stranger.tryCancel(routerId, o9.id)));
 
     // Admin dashboard guardians.

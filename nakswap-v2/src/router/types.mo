@@ -153,6 +153,7 @@ module {
     stats : Stats;
     priceRef : PriceRef; // transient: rebuilt from live samples after an upgrade
     revived : Set.Set<Nat>; // finished orders the late-deposit watch reopened
+    dustPayout : DustPayout;
     var nextHelper : Nat;
   };
 
@@ -192,6 +193,11 @@ module {
     pending : ?FeeSweep;
     autoSweepAt : Nat;
   };
+
+  // Where the stray account (dust swept from deposit accounts, tokens strangers sent to
+  // helpers) is paid out automatically, once it holds at least `minIcp`.
+  public type DustPayout = { var to : ?Principal; var minIcp : Nat };
+  public type DustPayoutInfo = { to : ?Principal; minIcp : Nat };
 
   // Slow moving average of the pool's marginal price (NAK out for the 0.01 ICP probe).
   public type PriceRef = { var probe : Nat; var at : Int };

@@ -75,7 +75,10 @@ after the window, and a second payment (e.g. the real one after a too-small test
 Dust (under the floor) never starts, revives or blocks anything; when an order's watch ends,
 whatever dust is left (ICP and NAK) is moved to the router's stray account
 (`router-admin.mjs sweep-dust <id>` does it now; `recover-stray <principal>` pays the stray
-account out). `router-admin.mjs late-check` (or the dashboard's Run recovery) checks now. Orders in review
+account out by hand). The stray account is also paid out automatically, hourly, to the
+dust wallet once it holds 0.125 ICP or more (`router-admin.mjs dust-payout <principal> <icp>`;
+the monitor raises a critical alert if that wallet changes). `router-admin.mjs late-check`
+(or the dashboard's Run recovery) checks now. Orders in review
 aren't watched (an admin resolves them).
 
 ### Price guard

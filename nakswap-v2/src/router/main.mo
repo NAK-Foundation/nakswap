@@ -56,6 +56,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   // Price reference for the swap price guard. Stable, so an upgrade (done in about a minute)
   // doesn't leave the guard without a reference.
   let priceRef : Types.PriceRef = { var probe = 0; var at = 0 };
+  // Automatic payout of the stray account (off until the admin sets a wallet).
+  let dustPayout : Types.DustPayout = { var to = null; var minIcp = 12_500_000 };
 
   transient let self = Principal.fromActor(this);
   transient let rt : Types.Runtime = {
@@ -70,6 +72,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     lateWatch;
     stats;
     priceRef;
+    dustPayout;
     revived;
     var nextHelper = 0;
   };
@@ -188,6 +191,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     if (rt.quarantined.size() > 0) { await* Engine.releaseHelpers(state, rt, self) };
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
+    // Hourly: pay the stray account out once it holds enough (two ledger queries).
+    if (tickCount % 60 == 0) { await* Engine.payoutStray(state, rt, self) };
     forgetOldHoudiniIds(now);
   };
 

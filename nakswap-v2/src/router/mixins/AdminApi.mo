@@ -432,6 +432,7 @@ mixin (
     if (not isGuardian(caller)) { return };
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
     await* Engine.releaseHelpers(state, rt, self);
+    await* Engine.payoutStray(state, rt, self);
   };
 
   // Check expired orders for late deposits now (it also runs on every tick). Moves nothing:
@@ -685,6 +686,28 @@ mixin (
     fees.bps := bps;
     fees.to := to;
     true;
+  };
+
+  // Automatic payout of the stray account: the wallet (null = off) and the ICP balance that
+  // triggers it (0.001 to 1,000 ICP). Same restrictions as the fee wallet.
+  public shared ({ caller }) func setDustPayout(to : ?Principal, minIcp : Nat) : async Bool {
+    if (not Orders.isAdmin(state.config, caller)) { return false };
+    let cfg = state.config;
+    if (minIcp < 10 * cfg.icpFee or minIcp > 1_000 * 100_000_000) { return false };
+    switch to {
+      case (?p) {
+        if (p.isAnonymous() or p == self or p == cfg.pool or p == cfg.icpLedger or p == cfg.nakLedger or rt.exec.helpers.any(func(h : Principal) : Bool = h == p)) { return false };
+      };
+      case null {};
+    };
+    rt.dustPayout.to := to;
+    rt.dustPayout.minIcp := minIcp;
+    true;
+  };
+
+  // Public, like the fee wallet, so the monitor can alert if it changes.
+  public query func dustPayoutInfo() : async Types.DustPayoutInfo {
+    { to = rt.dustPayout.to; minIcp = rt.dustPayout.minIcp };
   };
 
   // Send whatever has accrued now instead of waiting for the automatic threshold.

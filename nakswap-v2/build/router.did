@@ -45,6 +45,7 @@ type Router =
    checkLateDeposits: () -> (nat);
    clearHelper: (i: nat) -> (bool);
    createOrder: (args: CreateOrderArgs) -> (Result_7);
+   dustPayoutInfo: () -> (DustPayoutInfo) query;
    feeStatus: () -> (FeeStatus) query;
    forcePayout: (id: nat, nakAmount: nat, fromDeposit: bool) -> (opt Status);
    forceRefund: (id: nat, icpAmount: nat, fromDeposit: bool) -> (opt Status);
@@ -89,6 +90,7 @@ type Router =
    resolveStuckFees: (delivered: bool) -> (bool);
    runRecovery: () -> ();
    setConfig: (cfg: Config) -> (bool);
+   setDustPayout: (to: opt principal, minIcp: nat) -> (bool);
    setFee: (bps: nat, to: principal) -> (bool);
    setHelpers: (list: vec principal, moduleHash: blob) -> (bool);
    setPaused: (paused: bool) -> (bool);
@@ -209,6 +211,11 @@ type FeeStatus =
    pending: opt FeeSweep;
    stuck: nat;
    to: principal;
+ };
+type DustPayoutInfo = 
+ record {
+   minIcp: nat;
+   to: opt principal;
  };
 type CreateOrderError = 
  variant {

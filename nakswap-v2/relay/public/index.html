@@ -1035,8 +1035,15 @@
 
   $('recipient').value = store.get('nak.recipient', '');
   showRecipient();
-  const savedToken = store.get('nak.token', null);
-  if (savedToken) pickToken(savedToken);
+  // Every visit opens on USDC (Solana). The record is refreshed from the live token list so a
+  // changed Houdiniswap id or price is picked up, unless the visitor has already chosen another token.
+  const PRESET_TOKEN = { id: '6689b73ec90e45f3b3e5159e', symbol: 'USDC', name: 'USDC', chain: 'solana', chainName: 'Solana', chainType: 'sol', icon: 'https://api.houdiniswap.com/assets/tokens/USDC-SOL-027crg.png', decimals: 6, usd: 1 };
+  const isPreset = (t) => t && !t.direct && t.symbol === 'USDC' && t.chain === 'solana';
+  pickToken(PRESET_TOKEN);
+  api('/api/tokens?term=USDC').then(({ tokens }) => {
+    const live = (tokens || []).find(isPreset);
+    if (live && isPreset(token)) pickToken(live);
+  }).catch(() => {});
   loadHealth().then(updateSwapBtn);
   setInterval(loadHealth, 60_000);
   loadStats();

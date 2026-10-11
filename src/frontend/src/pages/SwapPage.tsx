@@ -14,7 +14,7 @@ import {
   useQuote,
   useTokens,
 } from "@/hooks/useBackend";
-import { ANONYMOUS_PRINCIPAL } from "@/lib/constants";
+import { ANONYMOUS_PRINCIPAL, DEFAULT_SEND_TOKEN } from "@/lib/constants";
 import { formatPrincipal, formatTimestamp, parseIcp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Principal } from "@icp-sdk/core/principal";
@@ -236,10 +236,16 @@ export function SwapPage() {
 
   const createdOrder = useOrder(createdOrderId);
 
-  // Default the token once the catalogue arrives.
+  // Default the token once the catalogue arrives: USDC on Solana, falling
+  // back to the first listed token if it is ever missing from the catalogue.
   useEffect(() => {
     if (tokensQuery.data && tokensQuery.data.length > 0 && !selectedToken) {
-      setSelectedToken(tokensQuery.data[0]);
+      const preset = tokensQuery.data.find(
+        (t) =>
+          t.symbol.toUpperCase() === DEFAULT_SEND_TOKEN.symbol &&
+          t.chain.toLowerCase() === DEFAULT_SEND_TOKEN.chain.toLowerCase(),
+      );
+      setSelectedToken(preset ?? tokensQuery.data[0]);
     }
   }, [tokensQuery.data, selectedToken]);
 

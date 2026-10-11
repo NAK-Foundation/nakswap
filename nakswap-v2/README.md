@@ -362,7 +362,9 @@ Done 2026-10-11 (Cloudflare Registrar + Cloudflare DNS, proxied):
   auto-renew on.
 - TLS: SSL mode Full, Always HTTPS, TLS 1.2 minimum, TLS 1.3, 0-RTT off.
 - Page-rewriting features off (Rocket Loader, Email Obfuscation, Automatic HTTPS Rewrites,
-  insecure-JS replacement, Server-side Excludes, Always Online); no Web Analytics injection.
+  insecure-JS replacement, Server-side Excludes, Always Online); Web Analytics (RUM) off and
+  its auto-install disabled (its beacon broke the CSP and changed the page). The monitor
+  fetches pages with a browser user agent, so an injected script shows up as a mismatch.
 - WAF custom rules: only GET/HEAD/POST; POST only to `/api/`; unknown host names blocked.
   Rate limit: 50 `/api/` requests per 10 s per visitor, then blocked for 10 s.
 - Late transform rule sets `x-origin-secret`; Railway `ORIGIN_SECRET` holds the same value

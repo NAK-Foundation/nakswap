@@ -4,3 +4,4 @@ Handled audit requests (ids from the router's `auditRequests`). The scheduled au
 appends one line per request: `- #<id> | <date> | <report file> | <fix branch or "no fixes">`.
 
 - prelaunch | 2026-10-10 | audits/2026-10-10-prelaunch.md | fixes deployed (34e8612, router 0cc5032d)
+- security+performance | 2026-10-11 | audits/2026-10-11-security-performance.md | fixes deployed (f630423, router 663274cc)

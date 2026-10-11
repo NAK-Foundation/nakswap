@@ -1,5 +1,7 @@
 # NAKSwap v2 — any token → ICP (Houdini) → NAK (ICPSwap)
 
+> **Moved:** NAKSwap v2 now lives in its own private repo, [bignito/nakswap-v2-live](https://github.com/bignito/nakswap-v2-live). Make changes there; this copy is frozen and kept for history only.
+
 Live version of NAKSwap v2, separate from the Caffeine sandbox app at the repo root.
 
 - `src/router/`: the router canister (Motoko), deployed to mainnet with `relay/scripts/deploy-router.mjs`.

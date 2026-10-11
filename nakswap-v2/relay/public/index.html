@@ -192,6 +192,12 @@
   .track input { flex: 1; min-width: 0; background: var(--nak-surface-hi); border: 1px solid var(--nak-border); border-radius: var(--radius); padding: 10px 12px; font-family: var(--font-mono); font-size: 14px; }
   .recent { margin-top: 10px; font-size: 13px; color: var(--nak-text-muted); display: flex; flex-wrap: wrap; gap: 8px; }
 
+  .hsupport { border: 1px solid var(--nak-border-strong); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px; }
+  .hsupport .row { align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-start; }
+  .hsupport .mono { word-break: break-all; font-size: 14px; }
+  .hsupport .btn { padding: 4px 10px; font-size: 12px; }
+  .hsupport p { margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: var(--nak-text-secondary); }
+  .hsupport a { color: var(--nak-text); text-underline-offset: 2px; }
   .foreign { border: 1px solid var(--nak-warn); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 20px; font-size: 14px; line-height: 1.5; }
   .foreign b { color: var(--nak-warn); font-weight: 600; }
   .foreign .mono { word-break: break-all; }
@@ -387,6 +393,11 @@
           <div class="stop" id="s1"><div class="big" id="s1big">Deposit with Houdiniswap</div><div class="sub" id="s1sub"></div></div>
           <div class="stop" id="s2"><div class="big">ICP to the NAKSwap router</div><div class="sub" id="s2sub"></div></div>
           <div class="stop" id="s3"><div class="big">NAK to your principal</div><div class="sub" id="s3sub"></div></div>
+        </div>
+        <div class="hsupport" id="houdiniHelp" hidden>
+          <span class="label" style="margin:0 0 6px">Houdiniswap order ID</span>
+          <div class="row"><span class="mono" id="houdiniIdText"></span><button class="btn copy" type="button" data-copy="houdiniIdText">Copy</button></div>
+          <p>Problem with your deposit or the Houdiniswap step (not received, stuck, refund)? Send this ID to Houdiniswap support on Telegram: <a href="https://t.me/HoudiniSwapSupport_bot" target="_blank" rel="noopener noreferrer">@HoudiniSwapSupport_bot</a>. Once the ICP reaches the NAKSwap router, message <a href="https://t.me/NAKSTOKEN" target="_blank" rel="noopener">@NAKSTOKEN</a> with your order code instead. Support never asks for your seed phrase or private keys.</p>
         </div>
         <dl class="facts" id="orderFacts"></dl>
         <div class="err" id="orderErr" role="alert"></div>
@@ -893,6 +904,7 @@
     $('foreignTo').textContent = '…';
     $('depositBox').hidden = true;
     const saved = store.get(`nak.order.${code}`, null);
+    showHoudiniId(saved?.houdiniId);
     if (saved) renderDeposit(saved.send);
     await pollOrder(code);
   }
@@ -905,6 +917,12 @@
     clearTimeout(pollTimer);
     pollOrder(currentOrder);
   });
+  // The Houdiniswap order ID, for Houdiniswap's own support (Houdini routes only).
+  function showHoudiniId(id) {
+    const v = typeof id === 'string' || typeof id === 'number' ? String(id) : '';
+    $('houdiniHelp').hidden = !v;
+    $('houdiniIdText').textContent = v;
+  }
   // Poll fast while something is moving, slower while waiting on Houdiniswap, rarely once
   // the order is expired or in review, never once it's done or while the tab is hidden.
   function nextPoll(code, ms) {
@@ -950,6 +968,7 @@
       // "arrived": the ICP is with the router (Houdiniswap finished, or a direct payment landed).
       const arrived = direct ? received > 0n || !['awaitingDeposit', 'expired'].includes(o.stage) : h?.status === 4;
       if (h?.send) renderDeposit(h.send);
+      showHoudiniId(direct ? null : h?.houdiniId);
       const hs = direct ? (arrived ? 4 : 0) : h?.status;
       if (direct) {
         const saved = store.get(`nak.order.${code}`, null);
@@ -962,7 +981,7 @@
       else if (!h) setStop('s1', 'active', 'Linking the Houdiniswap order…');
       else if (h.error) setStop('s1', 'active', `Houdiniswap status unavailable: ${h.error}`);
       else if (hs === 4) { setStop('s1', 'done', `Houdiniswap finished: ${fmt(h.outAmount, 4)} ICP sent to the router`); $('depositBox').hidden = true; }
-      else if ([5, 6, 7, 8].includes(hs)) setStop('s1', 'fail', `Houdiniswap: ${h.statusLabel}${h.actionRequired ? '. Contact Houdiniswap support with the order id below.' : ''}`);
+      else if ([5, 6, 7, 8].includes(hs)) setStop('s1', 'fail', `Houdiniswap: ${h.statusLabel}. ${h.actionRequired ? 'Action needed: contact' : 'For help, contact'} Houdiniswap support with the Houdiniswap order ID below.`);
       else setStop('s1', 'active', `Houdiniswap: ${h.statusLabel || 'waiting for your deposit'}`);
       const d = o.detail || {};
       if (o.stage === 'completed') {
@@ -995,7 +1014,7 @@
       }
       $('orderFacts').innerHTML = `
         <dt>NAK recipient</dt><dd style="word-break:break-all;max-width:260px">${esc(o.recipient)}</dd>
-        ${direct ? '<dt>Route</dt><dd>Paid with ICP directly</dd>' : `<dt>Houdiniswap order</dt><dd>${esc(h?.houdiniId || '—')}</dd>`}
+        <dt>Route</dt><dd>${direct ? 'Paid with ICP directly' : 'Houdiniswap, then ICPSwap'}</dd>
         <dt>Router deposit account</dt><dd style="word-break:break-all;max-width:260px">${esc(o.icpDepositAccount)}</dd>`;
     } catch (e) {
       if (code !== currentOrder) return;

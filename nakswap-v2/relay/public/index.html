@@ -161,20 +161,63 @@
   .route .why { color: var(--nak-warn); }
 
   /* The route rail: both legs of the swap drawn as one line, token → ICP → NAK. */
-  .rail { position: relative; padding-left: 26px; margin: 4px 0 18px; }
-  .rail::before { content: ""; position: absolute; left: 7px; top: 9px; bottom: 9px; width: 1px; background: var(--nak-border-strong); }
-  .rail.lit-1::before { background: linear-gradient(var(--nak-accent) 50%, var(--nak-border-strong) 50%); }
-  .rail.lit-2::before { background: var(--nak-accent); }
-  .stop { position: relative; padding-bottom: 14px; }
-  .stop:last-child { padding-bottom: 0; }
-  .stop::before { content: ""; position: absolute; left: -24px; top: 6px; width: 11px; height: 11px; border-radius: 50%; background: var(--nak-bg); border: 1.5px solid var(--nak-border-strong); }
-  .stop.done::before { background: var(--nak-accent); border-color: var(--nak-accent); }
-  .stop.active::before { border-color: var(--nak-accent); animation: pulse 1.6s ease-in-out infinite; }
-  .stop.fail::before { background: var(--nak-negative); border-color: var(--nak-negative); }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 5px var(--nak-accent-soft); } }
-  @media (prefers-reduced-motion: reduce) { .stop.active::before { animation: none; } }
-  .stop .big { font-family: var(--font-mono); font-size: 15px; }
-  .stop .sub { font-size: 13px; color: var(--nak-text-muted); }
+  /* ---- swap tracker: status, timer, progress and the full list of steps ---- */
+  .track-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin: 2px 0 12px; }
+  .track-title { font-size: 21px; font-weight: 600; line-height: 1.3; }
+  .track-title.ok { color: var(--nak-positive); }
+  .track-title.bad { color: #f87171; }
+  .timer { text-align: right; min-width: 132px; max-width: 240px; margin-left: auto; }
+  .timer-val { font-family: var(--font-mono); font-size: 30px; font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .timer.low .timer-val, .timer.low .label { color: var(--nak-warn); }
+  .timer-note { font-size: 13px; color: var(--nak-text-secondary); margin-top: 2px; }
+  .progress { height: 10px; border-radius: 5px; background: var(--nak-surface-hi); border: 1px solid var(--nak-border-strong); overflow: hidden; }
+  .progress .bar { height: 100%; width: 0; background: var(--nak-accent); transition: width .6s ease; }
+  .progress.ok .bar { background: var(--nak-positive); }
+  .progress.bad .bar { background: var(--nak-negative); }
+  .progress-text { font-size: 14px; color: var(--nak-text-secondary); margin: 6px 0 18px; }
+  .steps { list-style: none; margin: 4px 0 20px; padding: 0; }
+  .step { position: relative; display: grid; grid-template-columns: 34px 1fr; gap: 0 12px; padding-bottom: 18px; }
+  .step:last-child { padding-bottom: 0; }
+  .step::before { content: ""; position: absolute; left: 16px; top: 34px; bottom: 2px; width: 2px; background: var(--nak-border-strong); }
+  .step:last-child::before { display: none; }
+  .step.done::before { background: var(--nak-positive); }
+  .step .ico { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-family: var(--font-mono); font-size: 15px; font-weight: 600; border: 2px solid var(--nak-border-strong); color: var(--nak-text-secondary); background: var(--nak-bg); position: relative; }
+  .step.done .ico { background: var(--nak-positive); border-color: var(--nak-positive); color: #04130d; }
+  .step.done.fresh .ico { animation: pop .45s ease-out; }
+  .step.fail .ico { background: var(--nak-negative); border-color: var(--nak-negative); color: #fff; }
+  .step.active .ico { border-color: var(--nak-accent); color: var(--nak-text); }
+  .step.active .ico::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 3px solid transparent; border-top-color: var(--nak-accent); border-right-color: var(--nak-accent); animation: spin 1.1s linear infinite; }
+  .step.skip .ico { border-style: dashed; color: var(--nak-text-muted); }
+  .step-title { font-size: 16px; font-weight: 600; line-height: 1.35; padding-top: 6px; }
+  .step.todo .step-title, .step.skip .step-title { color: var(--nak-text-secondary); font-weight: 500; }
+  .step-state { display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; vertical-align: 2px; }
+  .step.done .step-state { color: var(--nak-positive); }
+  .step.active .step-state { color: #c4b5fd; }
+  .step.fail .step-state { color: #f87171; }
+  .step.todo .step-state, .step.skip .step-state { color: var(--nak-text-muted); }
+  .step-detail { font-size: 14.5px; line-height: 1.5; color: var(--nak-text-secondary); margin-top: 3px; word-break: break-word; }
+  .step-time { font-family: var(--font-mono); font-size: 13px; color: var(--nak-text-muted); margin-top: 3px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pop { 0% { transform: scale(.6); } 70% { transform: scale(1.12); } 100% { transform: scale(1); } }
+  @media (prefers-reduced-motion: reduce) {
+    .step .ico, .step.active .ico::after { animation: none !important; }
+    .progress .bar { transition: none; }
+  }
+  @media (prefers-contrast: more) {
+    .step-detail, .progress-text, .timer-note { color: var(--nak-text); }
+    .step .ico, .progress { border-color: var(--nak-text-secondary); }
+  }
+  /* Larger text (toggle in the order view; remembered on this device). */
+  #orderView.large .track-title { font-size: 26px; }
+  #orderView.large .timer-val { font-size: 38px; }
+  #orderView.large .step-title { font-size: 20px; }
+  #orderView.large .step-detail, #orderView.large .progress-text, #orderView.large .hsupport p, #orderView.large .foreign { font-size: 18px; }
+  #orderView.large .step-time, #orderView.large .facts { font-size: 16px; }
+  #orderView.large .step { grid-template-columns: 42px 1fr; }
+  #orderView.large .step .ico { width: 42px; height: 42px; font-size: 18px; }
+  #orderView.large .step::before { left: 20px; top: 42px; }
+  .textsize { padding: 6px 12px; font-size: 13px; }
+  .textsize[aria-pressed="true"] { border-color: var(--nak-accent); background: var(--nak-accent-soft); }
 
   .facts { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; font-size: 13px; margin: 0 0 18px; padding-top: 14px; border-top: 1px solid var(--nak-border); }
   .facts dt { color: var(--nak-text-muted); }
@@ -362,12 +405,28 @@
       <div class="card">
         <div class="row" style="margin-bottom:18px">
           <div><span class="label" style="margin:0">Order</span><div class="mono" style="font-size:20px" id="orderTitle"></div><div class="hint" style="margin-top:4px">Order code <span class="mono" id="orderCode"></span> <button class="btn copy" style="padding:2px 8px;font-size:12px" type="button" data-copy="orderCode">Copy</button><br>Save it to track this swap from any device.</div></div>
-          <button class="btn" id="backBtn" type="button">New swap</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <button class="btn textsize" id="textSize" type="button" aria-pressed="false">Larger text</button>
+            <button class="btn" id="backBtn" type="button">New swap</button>
+          </div>
         </div>
         <div class="foreign" id="foreignNote" hidden>
           <b>This order wasn’t started on this device.</b> Its NAK goes to <span class="mono" id="foreignTo">…</span>. Only send funds to it if you created this swap yourself. NAKSwap and its support never ask you to pay into an order someone else sent you.
           <div><button class="btn" type="button" id="foreignOk">I created this order, show where to pay</button></div>
         </div>
+        <div class="track-head">
+          <div>
+            <span class="label" style="margin:0 0 4px">Status</span>
+            <div class="track-title" id="trackTitle" role="status" aria-live="polite" aria-atomic="true">Loading your swap…</div>
+          </div>
+          <div class="timer" id="timerBox" hidden>
+            <span class="label" style="margin:0 0 4px" id="timerLabel">Time left to send</span>
+            <div class="timer-val" id="timerVal" role="timer" aria-live="off" aria-labelledby="timerLabel">--:--</div>
+            <div class="timer-note" id="timerNote"></div>
+          </div>
+        </div>
+        <div class="progress" id="progress" role="progressbar" aria-label="Swap progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="bar" id="progressBar"></div></div>
+        <div class="progress-text" id="progressText"></div>
         <div class="deposit" id="depositBox" hidden>
           <span class="label">Send exactly</span>
           <div class="amt" id="depAmt"></div>
@@ -389,11 +448,8 @@
             <button class="btn copy" type="button" data-copy="depTag">Copy memo</button>
           </div>
         </div>
-        <div class="rail" id="orderRail">
-          <div class="stop" id="s1"><div class="big" id="s1big">Deposit with Houdiniswap</div><div class="sub" id="s1sub"></div></div>
-          <div class="stop" id="s2"><div class="big">ICP to the NAKSwap router</div><div class="sub" id="s2sub"></div></div>
-          <div class="stop" id="s3"><div class="big">NAK to your principal</div><div class="sub" id="s3sub"></div></div>
-        </div>
+        <h3 class="label" style="margin:0 0 12px" id="stepsTitle">Every step of your swap</h3>
+        <ol class="steps" id="steps" aria-labelledby="stepsTitle"></ol>
         <div class="hsupport" id="houdiniHelp" hidden>
           <span class="label" style="margin:0 0 6px">Houdiniswap order ID</span>
           <div class="row"><span class="mono" id="houdiniIdText"></span><button class="btn copy" type="button" data-copy="houdiniIdText">Copy</button></div>
@@ -871,11 +927,224 @@
     swapFailed: 'the ICPSwap swap did not go through',
     admin: 'an admin issued a refund',
   };
-  function setStop(id, state, text) {
-    const el = $(id);
-    el.classList.remove('done', 'active', 'fail');
-    if (state) el.classList.add(state);
-    $(`${id}sub`).textContent = text;
+  // ---------- swap tracker ----------
+  // Every step of the swap as a list: what's done (with times seen on this device), what's
+  // happening now, and what comes next. States are written out in words and shapes, not
+  // only colours; the status line is announced to screen readers when it changes.
+  const STATE_WORD = { done: 'Done', active: 'In progress', fail: 'Stopped', todo: 'Up next', skip: 'Skipped' };
+  const ICON = { done: '✓', fail: '✕', skip: '–' };
+  let clockTimer = null;
+  let timerSpec = null;
+  let lastSteps = '';
+  let prevState = {};
+  const two = (n) => String(n).padStart(2, '0');
+  function clock(ms) {
+    const t = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
+    return h ? `${h}:${two(m)}:${two(x)}` : `${m}:${two(x)}`;
+  }
+  function span(ms) {
+    const t = Math.max(0, Math.round(ms / 1000));
+    if (t < 60) return `${t}s`;
+    const m = Math.floor(t / 60);
+    return m < 60 ? `${m}m ${two(t % 60)}s` : `${Math.floor(m / 60)}h ${two(m % 60)}m`;
+  }
+  const when = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  function tickClock() {
+    const t = timerSpec, box = $('timerBox');
+    if (!t) { box.hidden = true; return; }
+    box.hidden = false;
+    const now = Date.now();
+    if (t.mode === 'left') {
+      const left = t.to - now;
+      $('timerLabel').textContent = 'Time left to send';
+      $('timerVal').textContent = clock(left);
+      box.classList.toggle('low', left < 5 * 60_000);
+      $('timerNote').textContent = left > 0 ? `Send before ${when(t.to)}${left < 5 * 60_000 ? ' (less than 5 minutes)' : ''}` : 'The send window has closed';
+    } else {
+      box.classList.remove('low');
+      $('timerLabel').textContent = t.label;
+      $('timerVal').textContent = clock(t.mode === 'final' ? t.total : now - t.from);
+      $('timerNote').textContent = t.note || '';
+    }
+  }
+  function setClock(spec) {
+    timerSpec = spec;
+    clearInterval(clockTimer);
+    tickClock();
+    if (spec && spec.mode !== 'final') clockTimer = setInterval(tickClock, 1000);
+  }
+  // Times a step was first seen in progress / done on this device (best effort).
+  function stamps(code, steps) {
+    const key = `nak.ev.${code}`;
+    const ev = store.get(key, {});
+    let changed = false;
+    for (const s of steps) {
+      if (s.state === 'active' && !ev[`a:${s.key}`]) { ev[`a:${s.key}`] = Date.now(); changed = true; }
+      if ((s.state === 'done' || s.state === 'fail') && ev[`a:${s.key}`] && !ev[`d:${s.key}`]) { ev[`d:${s.key}`] = Date.now(); changed = true; }
+    }
+    if (changed) store.set(key, ev);
+    return ev;
+  }
+  function resetTrack() {
+    setClock(null);
+    lastSteps = '';
+    prevState = {};
+    $('trackTitle').textContent = 'Loading your swap…';
+    $('trackTitle').className = 'track-title';
+    $('steps').innerHTML = '';
+    $('progressBar').style.width = '0%';
+    $('progress').setAttribute('aria-valuenow', '0');
+    $('progress').className = 'progress';
+    $('progressText').textContent = '';
+  }
+  function buildSteps(o) {
+    const h = o.houdini;
+    const direct = o.route === 'icp';
+    const d = o.detail || {};
+    const st = o.stage;
+    const hs = direct || !h || h.error || h.status == null ? null : Number(h.status);
+    const received = direct && o.receivedIcp != null ? BigInt(o.receivedIcp) : 0n;
+    const routerHas = !['awaitingDeposit', 'expired'].includes(st);
+    // "arrived": the ICP is with the router (Houdiniswap finished, or a direct payment landed).
+    const arrived = direct ? received > 0n || routerHas : hs === 4 || routerHas;
+    const refunding = st === 'refundPending' || st === 'refunded';
+    const steps = [{
+      key: 'created',
+      title: 'Order created',
+      state: 'done',
+      detail: direct ? 'Your NAKSwap order and its own ICP deposit account are ready.' : 'Your NAKSwap order and its Houdiniswap exchange are set up.',
+      time: o.createdAt ? `At ${when(Number(o.createdAt))}` : '',
+    }];
+    if (direct) {
+      const s = { key: 'send', title: 'Send ICP to your deposit account' };
+      if (arrived) Object.assign(s, { state: 'done', detail: received > 0n ? `${fmt(e8(received), 8)} ICP arrived.` : 'Your ICP arrived.' });
+      else if (st === 'expired') Object.assign(s, { state: 'fail', detail: 'No ICP arrived in time. Start a new swap instead of sending to this order. ICP sent here later (within 3 days) is still swapped or refunded automatically.' });
+      else Object.assign(s, { state: 'active', detail: 'Send the amount shown above in one transfer, from any ICP wallet or exchange. The swap starts within about a minute of it arriving.' });
+      steps.push(s);
+    } else {
+      const sym = h?.send?.symbol || 'your tokens';
+      const failedH = [5, 6, 7, 8].includes(hs);
+      const help = 'Contact Houdiniswap support with the Houdiniswap order ID below.';
+      const send = { key: 'send', title: `Send ${sym} to Houdiniswap` };
+      const conf = { key: 'confirm', title: 'Your deposit is confirmed on its network' };
+      const conv = { key: 'convert', title: `Houdiniswap converts ${sym} to ICP` };
+      const deliv = { key: 'deliver', title: 'ICP delivered to the NAKSwap router' };
+      for (const x of [send, conf, conv, deliv]) Object.assign(x, { state: 'todo', detail: '' });
+      if (arrived || hs === 4) {
+        for (const x of [send, conf, conv]) x.state = 'done';
+        send.detail = 'Houdiniswap received your deposit.';
+        Object.assign(deliv, { state: 'done', detail: h?.outAmount ? `${fmt(h.outAmount, 4)} ICP sent to your order's deposit account.` : 'The ICP reached the router.' });
+      } else if (hs == null) {
+        Object.assign(send, { state: 'active', detail: h?.error ? `Houdiniswap status is unavailable right now (${h.error}). It keeps working; this page updates when it answers.` : 'Linking your Houdiniswap order…' });
+      } else if (hs === 5 || hs === 8) {
+        Object.assign(send, { state: 'fail', detail: `Houdiniswap: ${h.statusLabel || 'expired'}. No deposit arrived in time. ${help}` });
+      } else if (hs === 6 || hs === 7) {
+        send.state = conf.state = 'done';
+        send.detail = 'Houdiniswap received your deposit.';
+        Object.assign(conv, { state: 'fail', detail: hs === 7 ? `Houdiniswap refunded your deposit to your refund address. ${help}` : `Houdiniswap couldn't complete the exchange. ${help}` });
+      } else if (hs === 0) {
+        Object.assign(send, { state: 'active', detail: 'Send the exact amount shown above to the Houdiniswap address, before the timer runs out.' });
+      } else if (hs === 1) {
+        send.state = 'done';
+        send.detail = 'Houdiniswap sees your deposit.';
+        Object.assign(conf, { state: 'active', detail: 'Waiting for network confirmations. This depends on the coin (seconds to about 30 minutes).' });
+      } else {
+        send.state = conf.state = 'done';
+        send.detail = 'Houdiniswap received your deposit.';
+        Object.assign(conv, { state: 'active', detail: hs === 3 ? 'Private route: your funds pass through extra hops so the two sides can’t be linked. This takes longer.' : `Exchanging ${sym} for ICP${h?.eta ? `, about ${h.eta} min` : ''}.` });
+      }
+      steps.push(send, conf, conv, deliv);
+    }
+    const swap = { key: 'swap', title: 'NAKSwap router swaps ICP for NAK on ICPSwap', state: 'todo', detail: '' };
+    const houdiniStopped = [5, 6, 7, 8].includes(hs) && !arrived;
+    if (houdiniStopped) Object.assign(swap, { state: 'skip', detail: 'Not reached: the Houdiniswap step stopped.' });
+    else if (st === 'payoutPending' || st === 'completed') Object.assign(swap, { state: 'done', detail: d.icpIn ? `Swapped ${fmt(e8(d.icpIn), 4)} ICP.` : 'Swap done.' });
+    else if (refunding) {
+      const reason = Object.keys(d.reason || {})[0];
+      Object.assign(swap, { state: 'fail', detail: `Not swapped: ${REASONS[reason] || reason || 'it could not run'}. Your ICP is returned instead.` });
+    } else if (st === 'needsReview') Object.assign(swap, { state: 'fail', detail: 'Held for manual review. Your funds are held, not lost: message us on Telegram @NAKSTOKEN with your order code.' });
+    else if (st === 'expired' && arrived) Object.assign(swap, { state: 'active', detail: 'Your ICP arrived after the window. The router swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.' });
+    else if (st === 'expired') Object.assign(swap, { state: direct ? 'todo' : 'fail', detail: direct ? '' : 'No ICP arrived before the order expired. If Houdiniswap delivers late (within 3 days), the router swaps or refunds it automatically.' });
+    else if (st === 'swapping' || arrived) Object.assign(swap, { state: 'active', detail: st === 'swapping' ? 'Swapping now. This usually takes under a minute.' : 'ICP received, starting the swap (within about a minute).' });
+    steps.push(swap);
+    if (refunding) {
+      steps.push({
+        key: 'refund',
+        title: 'ICP refunded to your principal',
+        state: st === 'refunded' ? 'done' : 'active',
+        detail: st === 'refunded' ? `${fmt(e8(d.icpAmount), 4)} ICP sent to ${o.refundTo} (ICP ledger block ${d.block}).` : `Sending the ICP back to ${o.refundTo}.`,
+      });
+    }
+    const pay = { key: 'pay', title: 'NAK delivered to your wallet', state: 'todo', detail: `To ${o.recipient}.` };
+    if (st === 'completed') Object.assign(pay, { state: 'done', detail: `${fmt(e8(d.nakOut), 2)} NAK sent to ${o.recipient} (NAK ledger block ${d.block}).` });
+    else if (st === 'payoutPending') Object.assign(pay, { state: 'active', detail: `Sending ${fmt(e8(d.nakAmount), 2)} NAK to ${o.recipient}.` });
+    else if (refunding) Object.assign(pay, { state: 'skip', detail: 'Not sent: your ICP was refunded instead.' });
+    else if (houdiniStopped) Object.assign(pay, { state: 'skip', detail: 'Not reached.' });
+    steps.push(pay);
+    return { steps, arrived, hs, failedH: [5, 6, 7, 8].includes(hs) };
+  }
+  function renderTrack(code, o) {
+    const { steps, arrived, hs, failedH } = buildSteps(o);
+    const ev = stamps(code, steps);
+    for (const s of steps) {
+      const a = ev[`a:${s.key}`], dn = ev[`d:${s.key}`];
+      if (s.key === 'created') continue;
+      if (s.state === 'done' && dn) s.time = `Done at ${when(dn)}${a && dn - a > 1000 ? ` · took ${span(dn - a)}` : ''}`;
+      else if (s.state === 'active' && a) s.time = `Started ${when(a)} · ${span(Date.now() - a)} so far`;
+    }
+    const counted = steps.filter((s) => s.state !== 'skip');
+    const total = counted.length;
+    const done = counted.filter((s) => s.state === 'done').length;
+    const failAt = steps.findIndex((s) => s.state === 'fail');
+    const activeAt = steps.findIndex((s) => s.state === 'active');
+    const st = o.stage;
+    let title, tone = '';
+    if (st === 'completed') { title = `Done: ${fmt(e8(o.detail?.nakOut), 2)} NAK delivered`; tone = 'ok'; }
+    else if (st === 'refunded') { title = `Refunded: ${fmt(e8(o.detail?.icpAmount), 4)} ICP returned`; tone = 'bad'; }
+    else if (st === 'needsReview') { title = 'Held for review. Your funds are safe'; tone = 'bad'; }
+    else if (failAt >= 0) {
+      const k = steps[failAt].key;
+      title = k === 'send' ? 'Expired: no deposit arrived in time' : k === 'convert' ? `Houdiniswap: ${o.houdiniStatusLabel || o.houdini?.statusLabel || 'stopped'}` : 'Stopped. See the steps below';
+      tone = 'bad';
+    }
+    else if (activeAt >= 0) title = { send: 'Waiting for your deposit', confirm: 'Confirming your deposit', convert: 'Converting to ICP', swap: 'Swapping ICP for NAK', refund: 'Returning your ICP', pay: 'Sending your NAK' }[steps[activeAt].key] || steps[activeAt].title;
+    else title = 'Working on it';
+    const pct = st === 'completed' || st === 'refunded' ? 100 : Math.round(((done + (activeAt >= 0 ? 0.5 : 0)) / total) * 100);
+    $('progressBar').style.width = `${pct}%`;
+    $('progress').setAttribute('aria-valuenow', String(pct));
+    $('progress').setAttribute('aria-valuetext', `${pct}% · ${title}`);
+    $('progress').className = `progress${tone ? ` ${tone}` : ''}`;
+    $('progressText').textContent = st === 'completed' ? `All ${total} steps done` : st === 'refunded' ? 'Finished: your ICP was refunded' : failAt >= 0 ? `Stopped at step ${failAt + 1} of ${steps.length}` : `Step ${activeAt >= 0 ? activeAt + 1 : done + 1} of ${steps.length}`;
+    if ($('trackTitle').textContent !== title) $('trackTitle').textContent = title; // announced (aria-live)
+    $('trackTitle').className = `track-title${tone ? ` ${tone}` : ''}`;
+    const html = steps
+      .map((s, i) => {
+        const fresh = s.state === 'done' && prevState[s.key] && prevState[s.key] !== 'done' ? ' fresh' : '';
+        return `<li class="step ${s.state}${fresh}"${s.state === 'active' ? ' aria-current="step"' : ''}><span class="ico" aria-hidden="true">${ICON[s.state] || i + 1}</span><div><div class="step-title">${esc(s.title)}<span class="step-state">${STATE_WORD[s.state]}</span></div>${s.detail ? `<div class="step-detail">${esc(s.detail)}</div>` : ''}${s.time ? `<div class="step-time">${esc(s.time)}</div>` : ''}</div></li>`;
+      })
+      .join('');
+    if (html !== lastSteps) { $('steps').innerHTML = html; lastSteps = html; }
+    prevState = Object.fromEntries(steps.map((s) => [s.key, s.state]));
+    // Clock: time left to send while waiting for the deposit; time since the order while
+    // it moves; total time once done (if this device saw it happen).
+    const created = o.createdAt ? Number(o.createdAt) : null;
+    const sendStep = steps.find((s) => s.key === 'send');
+    const deadline = o.route === 'icp' ? o.deposit?.expires : o.houdini?.send?.expires;
+    if (sendStep?.state === 'active' && deadline && !Number.isNaN(Date.parse(deadline))) setClockOnce({ mode: 'left', to: Date.parse(deadline) });
+    else if (st === 'completed') {
+      const end = ev['d:pay'];
+      setClockOnce(created && end ? { mode: 'final', label: 'Total time', total: end - created, note: `From order to NAK delivered` } : null);
+    } else if (created && activeAt >= 0 && !(st === 'expired' && !arrived) && !failedH) setClockOnce({ mode: 'elapsed', from: created, label: 'Time since order', note: 'Most finish 5–45 min after the deposit' });
+    else setClockOnce(null);
+    return { arrived, hs };
+  }
+  // Only restart the clock when what it shows changes (polls repeat every few seconds).
+  function setClockOnce(spec) {
+    const k = JSON.stringify(spec);
+    if (k === setClockOnce.last) return;
+    setClockOnce.last = k;
+    setClock(spec);
   }
   // The order on screen. Polls for any other order (an earlier one still in flight) are
   // dropped, so one order's details can never be drawn into another's view.
@@ -897,8 +1166,8 @@
     $('orderCode').textContent = code;
     $('orderErr').textContent = '';
     $('orderFacts').innerHTML = '';
-    for (const id of ['s1', 's2', 's3']) setStop(id, null, '');
-    $('orderRail').className = 'rail';
+    setClockOnce.last = undefined;
+    resetTrack();
     foreignHold = !knownHere(code);
     $('foreignNote').hidden = !foreignHold;
     $('foreignTo').textContent = '…';
@@ -908,6 +1177,17 @@
     if (saved) renderDeposit(saved.send);
     await pollOrder(code);
   }
+  function applyTextSize(on) {
+    $('orderView').classList.toggle('large', on);
+    $('textSize').setAttribute('aria-pressed', String(on));
+    $('textSize').textContent = on ? 'Normal text' : 'Larger text';
+  }
+  applyTextSize(store.get('nak.large', false) === true);
+  $('textSize').addEventListener('click', () => {
+    const on = !$('orderView').classList.contains('large');
+    store.set('nak.large', on);
+    applyTextSize(on);
+  });
   $('foreignOk').addEventListener('click', () => {
     if (!currentOrder) return;
     const recent = store.get('nak.recent', []).filter((x) => x !== currentOrder && /-/.test(x));
@@ -963,55 +1243,22 @@
       $('foreignTo').textContent = o.recipient;
       const h = o.houdini;
       const direct = o.route === 'icp';
-      $('s1big').textContent = direct ? 'ICP sent to your deposit account' : 'Deposit with Houdiniswap';
       const received = direct && o.receivedIcp != null ? BigInt(o.receivedIcp) : 0n;
-      // "arrived": the ICP is with the router (Houdiniswap finished, or a direct payment landed).
-      const arrived = direct ? received > 0n || !['awaitingDeposit', 'expired'].includes(o.stage) : h?.status === 4;
       if (h?.send) renderDeposit(h.send);
       showHoudiniId(direct ? null : h?.houdiniId);
-      const hs = direct ? (arrived ? 4 : 0) : h?.status;
+      const { arrived } = renderTrack(code, o);
       if (direct) {
         const saved = store.get(`nak.order.${code}`, null);
         if (!arrived && o.stage === 'awaitingDeposit') renderDeposit({ ...(saved?.send || {}), symbol: 'ICP', chain: 'icp', to: o.deposit.to, icrc: o.deposit.icrc, expires: o.deposit.expires });
         else $('depositBox').hidden = true;
-        if (arrived) setStop('s1', 'done', received > 0n ? `Received ${fmt(e8(received), 8)} ICP` : 'ICP received');
-        else if (o.stage === 'expired') setStop('s1', 'fail', 'No ICP arrived in time. Start a new swap instead of sending to this order. If you already sent ICP, the router keeps checking for 3 days and swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.');
-        else setStop('s1', 'active', 'Waiting for your ICP. The swap starts within about a minute of it arriving.');
-      }
-      else if (!h) setStop('s1', 'active', 'Linking the Houdiniswap order…');
-      else if (h.error) setStop('s1', 'active', `Houdiniswap status unavailable: ${h.error}`);
-      else if (hs === 4) { setStop('s1', 'done', `Houdiniswap finished: ${fmt(h.outAmount, 4)} ICP sent to the router`); $('depositBox').hidden = true; }
-      else if ([5, 6, 7, 8].includes(hs)) setStop('s1', 'fail', `Houdiniswap: ${h.statusLabel}. ${h.actionRequired ? 'Action needed: contact' : 'For help, contact'} Houdiniswap support with the Houdiniswap order ID below.`);
-      else setStop('s1', 'active', `Houdiniswap: ${h.statusLabel || 'waiting for your deposit'}`);
-      const d = o.detail || {};
-      if (o.stage === 'completed') {
-        setStop('s2', 'done', `Swapped ${fmt(e8(d.icpIn), 4)} ICP on ICPSwap`);
-        setStop('s3', 'done', `${fmt(e8(d.nakOut), 2)} NAK delivered to ${o.recipient} (NAK ledger block ${d.block})`);
-        $('orderRail').className = 'rail lit-2';
-        delay = null;
-      } else if (o.stage === 'refunded') {
-        const reason = Object.keys(d.reason || {})[0];
-        setStop('s2', 'fail', `Refunded ${fmt(e8(d.icpAmount), 4)} ICP to ${o.refundTo} because ${REASONS[reason] || reason} (ICP ledger block ${d.block})`);
-        setStop('s3', null, 'Not sent');
-        delay = null;
-      } else if (o.stage === 'expired') {
-        if (direct && arrived) setStop('s2', 'active', 'Your ICP arrived after the window. The router swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.');
-        else setStop('s2', direct ? null : 'fail', direct ? '' : 'No ICP arrived before the order expired. If Houdiniswap delivers late (within 3 days), the router swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.');
-        setStop('s3', null, '');
-        delay = arrived ? 20_000 : 60_000;
-      } else if (o.stage === 'needsReview') {
-        setStop('s2', 'fail', `Held for manual review. Your funds are held, not lost: message us on Telegram @NAKSTOKEN with this order code.`);
-        setStop('s3', null, '');
-        delay = 60_000;
-      } else {
-        const t = { awaitingDeposit: hs === 4 ? 'ICP received, starting the swap' : direct ? '' : 'Waiting for ICP from Houdiniswap', swapping: 'Swapping ICP for NAK on ICPSwap', payoutPending: 'Swap done, sending NAK', refundPending: 'Returning ICP to your principal' }[o.stage] ?? o.stage;
-        setStop('s2', o.stage !== 'awaitingDeposit' || hs === 4 ? 'active' : null, t);
-        setStop('s3', o.stage === 'payoutPending' ? 'active' : null, o.stage === 'payoutPending' ? `Sending ${fmt(e8(d.nakAmount), 2)} NAK to ${o.recipient}` : '');
-        $('orderRail').className = hs === 4 ? 'rail lit-1' : 'rail';
-        // Moving (ICP arrived, swapping, paying out): every 5 s. Waiting for a deposit: a
-        // direct payment every 8 s, Houdiniswap every 20 s.
-        delay = o.stage !== 'awaitingDeposit' || arrived ? 5_000 : direct ? 8_000 : 20_000;
-      }
+      } else if (arrived || [5, 6, 7, 8].includes(Number(h?.status))) $('depositBox').hidden = true;
+      if (o.stage === 'completed' || o.stage === 'refunded') delay = null;
+      else if (o.stage === 'expired') delay = arrived ? 20_000 : 60_000;
+      else if (o.stage === 'needsReview') delay = 60_000;
+      // Moving (ICP arrived, swapping, paying out): every 5 s. Waiting for a deposit: a
+      // direct payment every 8 s, Houdiniswap every 20 s.
+      else delay = o.stage !== 'awaitingDeposit' || arrived ? 5_000 : direct ? 8_000 : 20_000;
+      void received;
       $('orderFacts').innerHTML = `
         <dt>NAK recipient</dt><dd style="word-break:break-all;max-width:260px">${esc(o.recipient)}</dd>
         <dt>Route</dt><dd>${direct ? 'Paid with ICP directly' : 'Houdiniswap, then ICPSwap'}</dd>
@@ -1051,7 +1298,7 @@
   function route() {
     const m = location.hash.match(/order=(\d+-[0-9a-f]{20})/);
     if (m) showOrder(m[1]);
-    else { currentOrder = null; clearTimeout(pollTimer); $('orderView').hidden = true; $('swapView').hidden = false; renderRecent(); }
+    else { currentOrder = null; clearTimeout(pollTimer); setClock(null); $('orderView').hidden = true; $('swapView').hidden = false; renderRecent(); }
   }
   window.addEventListener('hashchange', route);
 

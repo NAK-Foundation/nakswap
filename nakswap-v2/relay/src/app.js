@@ -729,6 +729,7 @@ export function createApp({
         200,
         {
           orderId: fresh.id,
+          createdAt: Number(BigInt(fresh.createdAt) / 1_000_000n),
           route: 'icp',
           stage: statusName(fresh.status),
           detail: Object.values(fresh.status)[0],
@@ -781,6 +782,7 @@ export function createApp({
       200,
       {
         orderId: fresh.id,
+        createdAt: Number(BigInt(fresh.createdAt) / 1_000_000n),
         stage: statusName(fresh.status),
         detail: Object.values(fresh.status)[0],
         houdini: hd,

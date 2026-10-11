@@ -852,6 +852,9 @@ export function createApp({
           routerReady: Boolean(ic.routerId),
           routerError: ic.routerError ? 'router unreachable' : null,
           operator: ic.principal,
+          // The deployed commit (Railway sets it), so the monitor can compare the live pages
+          // with that commit's files.
+          commit: /^[0-9a-f]{7,40}$/.test(String(process.env.RAILWAY_GIT_COMMIT_SHA || '')) ? process.env.RAILWAY_GIT_COMMIT_SHA : null,
           limits: {
             minOrderIcp: Number(cfg.minOrderIcp) / 1e8,
             maxOrderIcp,

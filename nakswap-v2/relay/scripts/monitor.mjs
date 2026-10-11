@@ -3,6 +3,7 @@
 //   { at, level: 'ok'|'warn'|'crit', alerts: [{ level, text }], status, helpers, audits }
 //
 //   node scripts/monitor.mjs            (from relay/)
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -215,7 +216,33 @@ const pageSha = async (route) => {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return crypto.createHash('sha256').update(Buffer.from(await r.arrayBuffer())).digest('hex');
 };
-const localSha = (f) => crypto.createHash('sha256').update(fs.readFileSync(path.join(here, '..', 'public', f))).digest('hex');
+// Compare with the files of the commit the site says it runs (deploys are pinned, so the
+// branch tip can be ahead of the live site); without git or a commit, with this checkout.
+const deployed = /^[0-9a-f]{7,40}$/.test(String(relay?.commit || '')) ? relay.commit : null;
+const git = (...a) => execFileSync('git', a, { cwd: here, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 << 20 });
+let gitOk = false;
+if (deployed) {
+  try {
+    git('fetch', '-q', 'origin');
+  } catch {
+    // offline or no remote: use what's here
+  }
+  try {
+    git('cat-file', '-e', `${deployed}^{commit}`);
+    gitOk = true;
+  } catch {
+    try {
+      git('rev-parse', '--git-dir');
+      add('crit', `Swap site runs commit ${deployed}, which isn't in the repo. Pause the router and check Railway.`);
+    } catch {
+      // not a git checkout: fall back to the files here
+    }
+  }
+}
+const localSha = (f) => {
+  const bytes = gitOk ? git('show', `${deployed}:nakswap-v2/relay/public/${f}`) : fs.readFileSync(path.join(here, '..', 'public', f));
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+};
 const pageCheck = async () => {
   const bad = [];
   for (const [route, f] of Object.entries(PAGES)) {
@@ -233,7 +260,7 @@ if (relay) {
     await new Promise((r) => setTimeout(r, 90_000));
     bad = await pageCheck();
   }
-  integrity.pages = bad.length ? { differ: bad } : 'match';
+  integrity.pages = bad.length ? { differ: bad, commit: deployed } : `match${gitOk ? ` (${deployed.slice(0, 7)})` : ''}`;
   if (bad.length) add('crit', `Swap site pages differ from the repo: ${bad.join(', ')}. If no deploy is running, the site may have been tampered with; pause the router and check Railway.`);
 }
 

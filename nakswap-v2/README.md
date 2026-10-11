@@ -8,6 +8,14 @@ Live version of NAKSwap v2, separate from the Caffeine sandbox app at the repo r
 - Railway variables: `HOUDINI_API_KEY`, `HOUDINI_API_SECRET` (you set these), `RELAY_IDENTITY_SEED`,
   `ROUTER_CANISTER_ID`, `IC_HOST=https://icp-api.io`. See `relay/.env.example`.
 
+**Deploys are pinned.** The Railway relay service is pinned to one commit, so a push to
+`nakswap-v2-live` does **not** change the live site (someone with only GitHub access can't
+ship a page). To release: push, run `npm test` in `relay/`, then point the service at the new
+commit (Railway → relay → Settings → Source, or the Railway tool `connect-service-source`
+with `commitSha`). Check the page and run `scripts/monitor.mjs` afterwards. The monitor's
+page check compares the live site with the checkout, so run it from the deployed commit.
+The relay runs with a 1 vCPU / 1 GB limit (it uses ~0.03 vCPU / ~150 MB).
+
 Until `ROUTER_CANISTER_ID` is set the page shows live quotes but swaps stay disabled. Without the
 Houdini key it shows a notice instead of tokens. Tests and the local replica setup still run against
 mock ledgers, a mock ICPSwap pool and mock Houdini (see below).

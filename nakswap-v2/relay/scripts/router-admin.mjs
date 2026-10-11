@@ -20,6 +20,7 @@
 //   ... add-guardian <principal>      (admin dashboard sign-in: watch, freeze/unfreeze, request audits)
 //   ... remove-guardian <principal> | guardians | audits
 //   ... late-check                    (check expired orders for ICP that arrived late, now)
+//   ... set-operators <p1>[,<p2>]     (replace the relay identity allowed to open orders)
 //   ... stats                         (public totals: swaps, ICP swapped, NAK delivered)
 //   ... helper-unused <i>             (what ICPSwap holds for helper i)
 //   ... helper-withdraw <i> icp|nak <amount>   (helper i pulls it out of the pool)
@@ -161,6 +162,12 @@ if (cmd === 'health') {
   const cfg = await router.getConfig();
   const next = { ...cfg, [field]: BigInt(Math.round(Number(b) * scale)) };
   console.log(`setConfig ${field}: ${cfg[field]} -> ${next[field]}:`, await router.setConfig(next));
+} else if (cmd === 'set-operators') {
+  // Replace the relay identities allowed to open orders (e.g. after rotating RELAY_IDENTITY_SEED).
+  const ops = String(a || '').split(',').map((x) => x.trim()).filter(Boolean).map((x) => Principal.fromText(x));
+  if (!ops.length) throw new Error('usage: set-operators <principal>[,<principal>]');
+  const cfg = await router.getConfig();
+  console.log('operators', cfg.operators.map((p) => p.toText()), '->', ops.map((p) => p.toText()), await router.setConfig({ ...cfg, operators: ops }));
 } else if (cmd === 'pause' || cmd === 'unpause') {
   console.log(cmd, await router.setPaused(cmd === 'pause'));
 } else if (cmd === 'fees') {

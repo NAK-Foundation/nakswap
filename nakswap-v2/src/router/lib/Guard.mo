@@ -14,7 +14,8 @@ module {
   // polling, which is where an order spammer could otherwise burn cycles.
   public let maxOpenOrders : Nat = 150;
   // The background worker checks a waiting deposit account at most this often (60 s).
-  public let recheckNanos : Int = 60_000_000_000;
+  // (50 s, so a 60 s worker tick checks each waiting order every tick.)
+  public let recheckNanos : Int = 50_000_000_000;
   // An order the relay never paired with a Houdini exchange is deleted after this (15 min):
   // nobody was ever shown where to pay, so nothing can arrive.
   public let unattachedTtlSeconds : Nat = 900;
@@ -24,12 +25,23 @@ module {
   // Late deposits: an expired order's deposit account is re-checked about every 10 minutes
   // (most overdue first) for 3 days after its window closed. ICP that turns up (a slow
   // exchange withdrawal, a late Houdini delivery, a direct ICP payment sent after the
-  // window) revives the order, which then swaps or refunds as usual. At most `lateChecksPerTick` checks per tick, and at most
-  // `maxLateWatch` orders watched at once.
+  // window) revives the order, which then swaps or refunds as usual. Finished (completed or
+  // refunded) orders are watched too, for ICP sent after the swap. At most
+  // `lateChecksPerTick` checks per tick and `maxLateWatch` orders watched at once.
   public let lateCheckNanos : Int = 600_000_000_000; // 10 min
   public let lateWatchNanos : Int = 259_200_000_000_000; // 3 days
   public let lateChecksPerTick : Nat = 10;
   public let maxLateWatch : Nat = 3_000;
+
+  // Price guard: a swap waits if the pool's live price is this much worse than its recent
+  // average (3%); an average older than 10 minutes is ignored (rebuilt from fresh samples).
+  public let priceGuardBps : Nat = 300;
+  public let priceRefMaxAgeNanos : Int = 600_000_000_000;
+
+  // A helper out of rotation with no order linked is released automatically only if it
+  // holds at most this much (stray dust); more could be an order's funds: admin decides.
+  public let helperDustIcp : Nat = 1_000_000; // 0.01 ICP
+  public let helperDustNak : Nat = 100_000_000_000; // 1,000 NAK
 
   // Privacy: Houdini order ids (the link back to the user's sending wallet) are forgotten
   // this long after an order completes or is refunded.

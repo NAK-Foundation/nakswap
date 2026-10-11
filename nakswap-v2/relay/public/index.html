@@ -255,11 +255,12 @@
     <h2>Before you swap</h2>
     <table class="spec" id="limits">
       <tr><th scope="row">Minimum</th><td id="limMin">$25 per swap, or 0.1 ICP<small>Houdiniswap won't quote below $25. Private routes usually need more, often $40 or so; the quote tells you. Paying with ICP directly starts at 0.1 ICP.</small></td></tr>
-      <tr><th scope="row">Maximum</th><td id="limMax">30 ICP per swap<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small></td></tr>
-      <tr><th scope="row">NAKSwap fee</th><td id="limFee">1% of the ICP<small>Taken from the ICP that reaches the router, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small></td></tr>
+      <tr><th scope="row">Maximum</th><td id="limMax">50 ICP per swap<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small></td></tr>
+      <tr><th scope="row">NAKSwap fee</th><td id="limFee">1% of the ICP<small>Taken from the ICP that reaches the router, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you’re quoted already has it taken out, and Houdiniswap’s own fee and network costs are already in its quote.</small></td></tr>
       <tr><th scope="row">Price guard</th><td id="limImpact">3.5% price impact<small>Quotes that would move the NAK price more than this are refused, with a smaller amount suggested. If the price moves past 5% by the time your ICP arrives, you get ICP back instead.</small></td></tr>
       <tr><th scope="row">Timing</th><td>1–45 minutes<small>Paying with ICP: about a minute after your ICP arrives. Houdiniswap standard routes take about 5–30 minutes and private routes 15–45.</small></td></tr>
-      <tr><th scope="row">Refunds</th><td>Always to you<small>If the Houdini step fails, your token goes back to your refund address. If the ICP → NAK step can't run, ICP goes to your principal.</small></td></tr>
+      <tr><th scope="row">Refunds</th><td>Back to you<small>If Houdiniswap can’t finish its step, Houdiniswap sends your token back to your refund address. If the ICP → NAK step can’t run, the router refunds the ICP to your principal.</small></td></tr>
+      <tr><th scope="row">Privacy</th><td>No accounts<small>NAKSwap has no sign-ups and keeps no profiles. To quote and route a Houdiniswap swap, your IP address, browser type and time zone are passed to Houdiniswap. NAK payouts are public on the ICP ledger, like any transfer.</small></td></tr>
     </table>
   </section>
 
@@ -374,7 +375,7 @@
     <p>&copy; 2026 NAK New Age Kapital. All rights reserved.</p>
   </section>
   <span>NAKSwap by New Age Kapital. Keep your order number for support.</span>
-  <span>Quotes from Houdiniswap and ICPSwap. Not financial advice.</span>
+  <span>Quotes from Houdiniswap and ICPSwap. Independent project, not affiliated with Houdiniswap, ICPSwap, DFINITY or OISY.</span>
 </footer>
 
 <dialog id="tokenDlg" aria-label="Choose a token">
@@ -518,7 +519,7 @@
       $('limMin').innerHTML = `${usd(g.minUsd || 25)} per swap, or ${fmt(g.minOrderIcp ?? 0.1, 4)} ICP<small>Houdiniswap won't quote below ${usd(g.minUsd || 25)}. Private routes usually need more, often $40 or so; the quote tells you. Paying with ICP directly starts at ${fmt(g.minOrderIcp ?? 0.1, 4)} ICP.</small>`;
       $('limMax').innerHTML = `${fmt(g.maxOrderIcp, 2)} ICP per swap${g.maxUsd ? `, about ${usd(g.maxUsd)}` : ''}<small>Above this, the router refunds the ICP to your principal instead of buying NAK.</small>`;
       const feePct = health.fee ? health.fee.pct : 1;
-      $('limFee').innerHTML = `${fmt(feePct, 2)}% of the ICP<small>Taken from the ICP that reaches the router, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you're quoted already has it taken out.</small>`;
+      $('limFee').innerHTML = `${fmt(feePct, 2)}% of the ICP<small>Taken from the ICP that reaches the router, only when the swap to NAK goes through. Refunds carry no NAKSwap fee. The NAK amount you’re quoted already has it taken out, and Houdiniswap’s own fee and network costs are already in its quote.</small>`;
       const capPct = health.limits.quoteImpactPct ?? health.limits.maxImpactPct;
       $('limImpact').innerHTML = `${fmt(capPct, 2)}% price impact<small>Quotes that would move the NAK price more than this are refused, with a smaller amount suggested. If the price moves past ${fmt(health.limits.maxImpactPct, 2)}% by the time your ICP arrives, you get ICP back instead.</small>`;
       updateAmountHint();
@@ -747,7 +748,7 @@
 
   function setReceiveHint(r) {
     const el = $('receiveHint');
-    if (!r.blocked) { el.textContent = `Guaranteed at least ${fmt(e8(r.guaranteedNak ?? r.minNakOut), 0)} NAK, or your ICP back`; return; }
+    if (!r.blocked) { el.textContent = `Minimum ${fmt(e8(r.guaranteedNak ?? r.minNakOut), 0)} NAK. If the swap can’t meet it, your ICP is refunded.`; return; }
     el.innerHTML = `Can't swap this amount: ${esc(r.blocked)}.` +
       (r.suggestAmount ? ` <button class="suggest" type="button" data-amount="${esc(r.suggestAmount)}">Use ${esc(r.suggestAmount)}${token?.direct ? ' ICP' : ''}</button>` : '');
   }
@@ -859,7 +860,7 @@
     $('depIcrcRow').hidden = !(isIcp && send.icrc);
     $('depIcrc').textContent = send.icrc || '';
     $('depNote').hidden = !isIcp;
-    $('depNote').textContent = isIcp ? 'Both point to the same deposit account, which belongs to this order only. No memo needed. Send the amount in one transfer: the swap starts as soon as it lands, and ICP sent after that isn’t part of this swap (support can return it). If about 6% less than the amount shown arrives, it can’t reach your guaranteed minimum and the ICP is refunded to your principal.' : '';
+    $('depNote').textContent = isIcp ? 'Both point to the same deposit account, which belongs to this order only. No memo needed. Send the amount in one transfer: the swap starts as soon as it lands. If about 3% less than the amount shown arrives, it can’t reach your minimum and the ICP is refunded to your principal. ICP sent to this account later (within 3 days) is swapped or refunded automatically.' : '';
     $('depAddr').textContent = send.to;
     $('depTagRow').hidden = !send.tag;
     $('depTag').textContent = send.tag || '';

@@ -135,7 +135,12 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
     await* processQueue();
   };
 
+  // Test hook: make the pending-transactions query fail (ICPSwap hiccup / upgrade).
+  var failTxQuery = false;
+  public func setFailTxQuery(b : Bool) : async () { failTxQuery := b };
+
   public query func getTransactionsByOwner(owner : Principal) : async { #ok : [(Nat, Text)]; #err : Ext.PoolError } {
+    if (failTxQuery) { return #err(#CommonError) };
     var out : [(Nat, Text)] = [];
     for ((id, p) in queue.entries()) { if (p.owner == owner) { out := out.concat([(id, "payout")]) } };
     #ok(out);

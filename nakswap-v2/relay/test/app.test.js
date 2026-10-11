@@ -416,3 +416,85 @@ test('unpaid direct orders are cancelled after their window (freeing the slot); 
     close();
   }
 });
+
+// Raw request with a chosen Host header (fetch won't set one).
+function rawCall(port, method, path, host, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : undefined;
+    const req = http.request({ host: '127.0.0.1', port, method, path, headers: { host, 'content-type': 'application/json', 'x-real-ip': '203.0.113.9', ...headers } }, (res) => {
+      let buf = '';
+      res.on('data', (c) => (buf += c));
+      res.on('end', () => resolve({ code: res.statusCode, headers: res.headers, body: buf ? JSON.parse(buf.startsWith('{') ? buf : '{}') : {} }));
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+test('audit 2026-10-10: domain redirect, token search cache, 3% direct minimum, payout nudges', async () => {
+  const ic = fakeIc();
+  let searches = 0;
+  const base = createMockHoudini({ payIcp: async () => {} });
+  const houdini = Object.assign(Object.create(base), { async searchTokens(...a) { searches += 1; return base.searchTokens(...a); } });
+  const server = http.createServer(createApp({ houdini, ic, canonicalHost: 'swap.example.org', pokeEveryMs: 0 }));
+  await new Promise((r) => server.listen(0, r));
+  const port = server.address().port;
+  const call = (m, p, b, extra) => rawCall(port, m, p, 'swap.example.org', b, extra);
+  try {
+    // Requests for other host names go to the canonical one (health stays for Railway).
+    const r = await rawCall(port, 'GET', '/?x=1', 'relay-production.up.railway.app');
+    assert.equal(r.code, 301);
+    assert.equal(r.headers.location, 'https://swap.example.org/?x=1');
+    assert.equal((await rawCall(port, 'GET', '/api/health', 'relay-production.up.railway.app')).code, 200);
+    assert.match((await call('GET', '/api/health')).headers['strict-transport-security'], /includeSubDomains/);
+    // A search term is answered from cache for a minute.
+    await call('GET', '/api/tokens?term=usdt');
+    await call('GET', '/api/tokens?term=usdt');
+    assert.equal(searches, 1);
+    // Direct ICP: minimum is the quote minus 3%.
+    const q = await call('POST', '/api/quote-icp', { amount: '2' });
+    assert.equal(BigInt(q.body.guaranteedNak), (BigInt(q.body.nakOut) * 9_700n) / 10_000n);
+    const o = await call('POST', '/api/orders', { quoteId: q.body.quoteId, recipient: ALICE });
+    assert.equal(o.code, 201);
+    assert.equal(ic.orders.get(BigInt(o.body.orderId)).minNakOut, BigInt(q.body.guaranteedNak));
+    // A pending payout is nudged when the order page polls.
+    const stored = ic.orders.get(BigInt(o.body.orderId));
+    stored.status = { payoutPending: { icpIn: 1n, nakAmount: 1n, createdAtTime: 1n } };
+    let poked = 0;
+    const realPoke = ic.poke;
+    ic.poke = async (id) => { poked += 1; return realPoke.call(ic, id); };
+    await call('GET', `/api/orders/${o.body.orderId}`, undefined, { 'x-order-key': o.body.orderKey });
+    assert.equal(poked, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test('token search abuse from one visitor cannot take the token list down for everyone', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const { call, close } = await serve(createApp({ houdini, ic }));
+  try {
+    let limited = 0;
+    for (let i = 0; i < 160; i++) {
+      // a different term each time, spread over minutes in real life; the per-minute limit is
+      // bypassed here by giving each burst its own fake minute via distinct IPs per 50
+      const r = await call('GET', `/api/tokens?term=t${i}`, undefined, { 'x-real-ip': `198.51.100.${Math.floor(i / 50)}` });
+      if (r.code === 429) limited += 1;
+    }
+    assert.equal(limited, 0, 'normal per-visitor volume is not limited site-wide');
+    const same = '198.51.100.250';
+    let blocked = 0;
+    for (let i = 0; i < 200; i++) {
+      const r = await call('GET', `/api/tokens?term=x${i}`, undefined, { 'x-real-ip': same });
+      if (r.code === 429) blocked += 1;
+    }
+    assert.ok(blocked > 0, 'one visitor is capped');
+    const list = await call('GET', '/api/tokens', undefined, { 'x-real-ip': '203.0.113.99' });
+    assert.equal(list.code, 200, 'the default list still works for everyone else');
+    assert.ok(list.body.tokens.length > 0);
+  } finally {
+    close();
+  }
+});

@@ -50,6 +50,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   let ops : Types.OpsState = { guardians = Set.empty<Principal>(); audits = Map.empty<Nat, Types.AuditRequest>(); var nextAudit = 0 };
   // Expired orders watched for a late deposit (order -> next check time).
   let lateWatch = Map.empty<Nat, Int>();
+  // Finished orders the late-deposit watch reopened (for clearer review messages).
+  let revived = Set.empty<Nat>();
   let stats : Types.Stats = { var swaps = 0; var icpSwapped = 0; var nakDelivered = 0; var ready = false };
 
   transient let self = Principal.fromActor(this);
@@ -64,6 +66,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     jobFees;
     lateWatch;
     stats;
+    priceRef = { var probe = 0; var at = 0 };
+    revived;
     var nextHelper = 0;
   };
 
@@ -87,6 +91,14 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     };
     stats.ready := true;
   };
+  // Once, on the upgrade that extends the late-deposit watch to finished orders.
+  let migrations = { var watchFinished = false };
+  if (not migrations.watchFinished) {
+    for (o in orders.values()) {
+      switch (o.status) { case (#completed _ or #refunded _) { Engine.watch(rt, o.id) }; case _ {} };
+    };
+    migrations.watchFinished := true;
+  };
 
   include OrdersApi(state, fees, privacy, rt, orders, active, self);
   include AdminApi(state, fees, privacy, rt, ops, orders, active, self);
@@ -98,9 +110,10 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     arg.size() <= Guard.maxArgBytes and (Orders.isOperator(state.config, caller) or ops.guardians.contains(caller));
   };
 
-  // Background worker. Money already in flight (payouts, refunds) goes first; then deposit
-  // checks, each order at most once a minute and least recently checked first, so a pile of
-  // orders can neither starve real ones nor make the router poll the ledger nonstop.
+  // Background worker. Money already in flight (payouts, refunds) goes first; then a price
+  // sample for the swap price guard; then deposit checks, each order at most once a tick and
+  // least recently checked first, so a pile of orders can neither starve real ones nor make
+  // the router poll the ledger nonstop.
   // tickSeconds = 0 disables it (tests drive the state machine through `poke`).
   func tick() : async () {
     let ids = active.values().toArray();
@@ -120,6 +133,10 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
         case null { active.remove(id) };
       };
     };
+
+    // Keep the price reference fresh (one pool query per tick, after payouts so a slow pool
+    // can't hold them up).
+    await* Engine.samplePrice(state, rt);
 
     let now = Time.now();
     let due = ids.filter(
@@ -161,6 +178,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     await* Engine.sweepOrderFees(state, fees, rt, orders);
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
     await* Engine.watchLate(state, rt, orders, active, self, false);
+    if (rt.quarantined.size() > 0) { await* Engine.releaseHelpers(state, rt, self) };
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
     forgetOldHoudiniIds(now);

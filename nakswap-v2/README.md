@@ -42,7 +42,8 @@ Houdini leg: the relay opens a router order, marks it with `attachHoudini(id, "i
 (so the router keeps it for its full window instead of dropping it as unpaired), and shows the
 order's deposit account twice: as an ICP account ID (NNS app, exchanges) and as an ICRC-1
 textual account (Plug, Oisy). Everything after that is the normal router flow: same fee,
-same guaranteed minimum (quote −6%), same refunds to the principal, same price guards.
+a guaranteed minimum of quote −3% (no Houdini leg to allow for), same refunds to the
+principal, same price guards.
 
 - Window: 45 minutes to pay. The relay then cancels an unpaid direct order (`cancelUnfunded`)
   to free its open-order slot; the router's own 2-hour TTL is the backstop.
@@ -53,12 +54,23 @@ same guaranteed minimum (quote −6%), same refunds to the principal, same price
 
 ### Late deposits
 
-An expired order (direct or Houdini) is not forgotten: the router re-checks its deposit
-account about every 10 minutes for 3 days after its window closed, most overdue first, 10
-checks per tick, at most 3,000 orders watched. ICP that turns up (more than two ledger fees)
-moves the order back to `awaitingDeposit`, and the worker swaps it, or refunds it if it is now
-too small, too big, or below the order's guaranteed minimum. `router-admin.mjs late-check`
-(or the dashboard's Run recovery) checks now.
+An expired order (direct or Houdini) is not forgotten, and neither is a finished one: the
+router re-checks the deposit account of expired, completed and refunded orders about every 10
+minutes for 3 days after the order's window closed, most overdue first, 10 checks per tick, at
+most 3,000 orders watched. A finished order is skipped while any of its NAKSwap fee is still
+in its account. ICP that turns up (more than two ledger fees) moves the order back to
+`awaitingDeposit`, and the worker swaps it, or refunds it if it is now too small, too big, or
+below the order's guaranteed minimum. This covers late Houdini deliveries, direct payments
+after the window, and a second payment (e.g. the real one after a too-small test).
+`router-admin.mjs late-check` (or the dashboard's Run recovery) checks now. Orders in review
+aren't watched (an admin resolves them).
+
+### Price guard
+
+The worker samples the pool's marginal price every tick and keeps a slow moving average. A
+swap whose live price is more than 3% worse than that average waits for a later tick (the
+average follows a genuine move within a few minutes), so a price pushed just before the
+router buys doesn't pass the impact and slippage checks.
 
 ## Swap helpers (parallel swaps)
 
@@ -309,12 +321,50 @@ each request not yet handled, runs a full security audit. Reports go to the `aud
 (`audits/LOG.md` lists handled requests); fixes, if any, go to an `audit-fix/<id>` branch with a
 pull request. Nothing is deployed automatically: deploying needs the controller key.
 
+## If something is compromised (runbook)
+
+Freeze first, then rotate. Freezing (dashboard button or `router-admin.mjs pause`) stops new
+orders and swaps; payouts and refunds already under way still finish.
+
+- **Relay / Railway compromised** (it could show fake deposit addresses or open spam orders):
+  1. `router-admin.mjs pause`.
+  2. New relay identity: generate a new 32-byte seed, set `RELAY_IDENTITY_SEED` on Railway, and
+     note its principal (`/api/health` → `operator` after redeploy, or derive it locally).
+  3. `router-admin.mjs set-operators <new principal>` (removes the old one).
+  4. Rotate `HOUDINI_API_KEY` / `HOUDINI_API_SECRET` (Houdini dashboard) and `ORDER_KEY_SECRET`.
+  5. Redeploy the relay from a known-good commit; check the page and `/api/health`.
+  6. `router-admin.mjs unpause`.
+- **Controller key compromised** (it can upgrade the canisters): from the NNS app (admin
+  principal, also a controller) remove the compromised controller from the router and every
+  helper, then upgrade from a known-good build. Keep controller keys offline.
+- **Dashboard guardian compromised**: it can only freeze/unfreeze, run recovery and request
+  audits. `router-admin.mjs remove-guardian <principal>`.
+- The 2-hourly monitor (`scripts/monitor.mjs`) raises a critical alert if any canister's code
+  or controllers change, if the admin, operators, fee or limits change, or if the site points
+  at a different router or operator.
+
+## Moving to a custom domain
+
+- Railway: add the domain to the relay service; keep the DNS record **DNS-only** (no
+  Cloudflare proxy). The relay takes the visitor IP from Railway's `X-Real-IP`; behind a
+  proxy every visitor would share the proxy's IP (rate limits and Houdini's `x-user-ip`).
+- Set `CANONICAL_HOST=<the domain>` on Railway: every other host name (the `railway.app` one)
+  then redirects there, so there's one site and one admin origin. `/api/health` is exempt.
+- Admin dashboard: Internet Identity gives each site its own principal. Sign in at
+  `https://<domain>/admin`, then `router-admin.mjs add-guardian <new principal>` and
+  `remove-guardian` the old one.
+- Update `RELAY_URL` for `scripts/monitor.mjs` (and the scheduled monitor task).
+- DNS hygiene: a CAA record for the certificate authority Railway uses (Let's Encrypt), and
+  for a domain that sends no mail, SPF `-all` and DMARC `p=reject`.
+
 ## Abuse and cycle-drain protection
 
 Router (`src/router/main.mo`, `lib/Guard.mo`):
 - `inspect` ingress filter: every update call must come from the relay (operator), the admin
-  or a controller, with an argument under 2 KB. Everything else, including query methods
-  called as updates, is rejected before consensus, so it costs the canister nothing.
+  or a controller, with an argument under 2 KB. Everything else from outside the IC,
+  including query methods called as updates, is rejected before consensus. (Other canisters
+  can still call public methods; every update checks its caller first, and the public
+  queries are cheap.)
 - `poke`, `getOrder`, `activeOrderIds` are operator/admin only (order ids count up, so a
   public `getOrder` would expose every user's principal). `health`, `getConfig`, `feeStatus`
   stay public queries, which are free for the canister.
@@ -349,7 +399,7 @@ Relay (`relay/src/app.js`, `server.js`):
   cap, header/request timeouts, 15 s timeouts on outbound calls, no CORS, CSP that allows only
   the page's own script (by hash) and Houdini's token icons, frame/sniffing/referrer headers.
 - Orders only against quotes the relay issued in the last 3 minutes, one order per quote, never
-  on a route marked unavailable. The relay sets the order's guaranteed minimum NAK (quote −6%);
+  on a route marked unavailable. The relay sets the order's guaranteed minimum NAK (quote −6%; −3% when paying with ICP);
   below that the router refunds ICP instead of filling.
 - Houdini's exchange must be ICP paid to this order's deposit account, and the router must
   confirm the pairing, before the user is shown a deposit address.

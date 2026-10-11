@@ -151,6 +151,8 @@ module {
     // Expired orders still watched for a late deposit: order -> next check time (ns).
     lateWatch : Map.Map<Nat, Int>;
     stats : Stats;
+    priceRef : PriceRef; // transient: rebuilt from live samples after an upgrade
+    revived : Set.Set<Nat>; // finished orders the late-deposit watch reopened
     var nextHelper : Nat;
   };
 
@@ -190,6 +192,9 @@ module {
     pending : ?FeeSweep;
     autoSweepAt : Nat;
   };
+
+  // Slow moving average of the pool's marginal price (NAK out for the 0.01 ICP probe).
+  public type PriceRef = { var probe : Nat; var at : Int };
 
   // Running totals of completed swaps, for the public stats strip (no per-call scan).
   public type Stats = { var swaps : Nat; var icpSwapped : Nat; var nakDelivered : Nat; var ready : Bool };

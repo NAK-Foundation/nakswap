@@ -1,3 +1,4 @@
+import Array "mo:core/Array";
 import Cycles "mo:core/Cycles";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
@@ -38,6 +39,13 @@ mixin (
     if (args.recipient.isAnonymous()) { return #err(#anonymousRecipient) };
     // Paying the router itself would strand the NAK / ICP in its main account.
     if (args.recipient == self or args.refundTo == ?self) { return #err(#invalidRecipient) };
+    // Nor to a helper, the pool or a ledger: funds sent there would be stuck or would mix
+    // into a running swap.
+    let reserved = func(p : Principal) : Bool {
+      p == cfg.pool or p == cfg.icpLedger or p == cfg.nakLedger or rt.exec.helpers.any(func(h : Principal) : Bool = h == p);
+    };
+    if (reserved(args.recipient)) { return #err(#invalidRecipient) };
+    switch (args.refundTo) { case (?r) { if (reserved(r)) { return #err(#invalidRecipient) } }; case null {} };
     switch (args.refundTo) { case (?r) { if (r.isAnonymous()) { return #err(#anonymousRecipient) } }; case null {} };
     if (active.size() >= Guard.maxOpenOrders) { return #err(#tooManyOpenOrders) };
     let id = state.nextId;
@@ -77,7 +85,7 @@ mixin (
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
       switch (o.status) {
         case (#awaitingDeposit) {
-          if (bal == 0) {
+          if (bal <= 2 * state.config.icpFee) { // dust isn't a payment
             // Kept as #expired (frees the open-order slot; reopen / recoverDeposit still work
             // if Houdini delivers after all).
             Engine.expire(rt, o, active);

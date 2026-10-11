@@ -42,6 +42,7 @@ type Router =
                                note: text;
                              }) query;
    cancelUnfunded: (id: nat) -> (bool);
+   checkLateDeposits: () -> (nat);
    clearHelper: (i: nat) -> (bool);
    createOrder: (args: CreateOrderArgs) -> (Result_6);
    feeStatus: () -> (FeeStatus) query;
@@ -59,6 +60,13 @@ type Router =
    myRole: () -> (Role) query;
    poke: (id: nat) -> (PokeResult);
    poolUnusedBalance: () -> (Result_1);
+   publicStats: () ->
+    (record {
+       icpSwapped: nat;
+       lateWatched: nat;
+       nakDelivered: nat;
+       swaps: nat;
+     }) query;
    publicStatus: () ->
     (record {
        acceptingOrders: bool;

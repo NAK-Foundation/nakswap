@@ -101,6 +101,7 @@ actor {
     {var root : Node__204828119<Nat, Nat>; var size : Nat__227979830};
   stable lateWatch :
     {var root : Node__204828119<Nat, Int>; var size : Nat__227979830};
+  stable migrations : {var watchFinished : Bool};
   stable ops :
     {
       audits : Map__230067015<Nat, AuditRequest__1040107917>;
@@ -117,6 +118,8 @@ actor {
   stable privacy : {var redactCursor : Nat; var secret : Blob};
   stable quarantined :
     {var root : Node__620761243<Principal>; var size : Nat__227979830};
+  stable revived :
+    {var root : Node__620761243<Nat>; var size : Nat__227979830};
   stable state :
     {var busy : Bool; var config : Config__223335084; var nextId : Nat};
   stable stats :

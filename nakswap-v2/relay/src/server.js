@@ -49,7 +49,9 @@ const orderLimitPerHour = Number(env.ORDER_LIMIT_PER_HOUR) > 0 ? Number(env.ORDE
 // Optional stricter quote-time price-impact limit in basis points (default: the router's
 // refund line minus 1.5 points).
 const maxQuoteImpactBps = Number(env.MAX_QUOTE_IMPACT_BPS) > 0 ? Number(env.MAX_QUOTE_IMPACT_BPS) : null;
-const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, maxQuoteImpactBps, log: (...a) => console.log(new Date().toISOString(), ...a) });
+// Optional: the site's own domain (e.g. swap.example.com). Other host names redirect there.
+const canonicalHost = /^[a-z0-9.-]{3,253}$/.test(String(env.CANONICAL_HOST || '').toLowerCase()) ? String(env.CANONICAL_HOST).toLowerCase() : null;
+const handle = createApp({ houdini, ic, prices, secret, orderLimitPerHour, maxQuoteImpactBps, canonicalHost, log: (...a) => console.log(new Date().toISOString(), ...a) });
 const port = Number(env.PORT || 8787);
 const server = http.createServer((req, res) =>
   handle(req, res).catch((e) => {

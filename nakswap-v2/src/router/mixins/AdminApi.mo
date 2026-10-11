@@ -247,7 +247,9 @@ mixin (
           case (#needsReview r) {
             // A payout may already have gone out: check the NAK ledger and use forcePayout
             // (or nothing) instead of starting over.
-            if (not r.startsWith(#text "payout") and not rt.inFlight.contains(id)) {
+            // Not while a helper still holds this order's funds (recover those first).
+            let linked = rt.helperOrders.entries().any(func((_, oid) : (Principal, Nat)) : Bool = oid == id);
+            if (not r.startsWith(#text "payout") and not rt.inFlight.contains(id) and not linked) {
               rt.payFromSub.remove(id);
               rt.subFees.remove(id);
               Engine.setStatus(o, active, #awaitingDeposit);
@@ -267,16 +269,23 @@ mixin (
   // is actually there: a deposit refund by the deposit's balance, a main-account refund by
   // main's ICP minus the fees that belong to the fee wallet. Refused when a NAK payout may
   // already have gone out (check the NAK ledger, then use forcePayout or nothing).
+  func linkedToHelper(id : Nat) : Bool {
+    rt.helperOrders.entries().any(func((_, oid) : (Principal, Nat)) : Bool = oid == id);
+  };
+
   public shared ({ caller }) func forceRefund(id : Nat, icpAmount : Nat, fromDeposit : Bool) : async ?Types.Status {
     if (not Orders.isAdmin(state.config, caller)) { return null };
     let cfg = state.config;
     if (icpAmount <= cfg.icpFee) { return null };
     let o = switch (orders.get(id)) { case (?o) { o }; case null { return null } };
-    if (not refundable(o.status) or rt.inFlight.contains(id)) { return ?o.status };
+    // A helper still holds this order's funds: recover those first (helperRecover).
+    if (not refundable(o.status) or rt.inFlight.contains(id) or linkedToHelper(id)) { return ?o.status };
+    var depositBal = 0;
     let ledger : Ext.Ledger = actor (cfg.icpLedger.toText());
     if (fromDeposit) {
       let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount });
       if (icpAmount + cfg.icpFee > bal) { return ?o.status };
+      depositBal := bal;
       // NAK in there means the swap went through: pay it out (forcePayout), don't refund.
       let nakL : Ext.Ledger = actor (cfg.nakLedger.toText());
       if ((await nakL.icrc1_balance_of({ owner = self; subaccount = ?o.subaccount })) > cfg.nakFee) { return ?o.status };
@@ -286,7 +295,15 @@ mixin (
       if (icpAmount + cfg.icpFee + fees.accrued > bal or state.busy) { return ?o.status };
     };
     if (not refundable(o.status) or rt.inFlight.contains(id)) { return ?o.status }; // re-check after the await
-    if (fromDeposit) { rt.subFees.remove(id) }; // whatever is refunded from there is the user's
+    if (fromDeposit) {
+      // Whatever is refunded is the user's; what the admin leaves behind is the NAKSwap fee
+      // (if this order had one), swept to the fee wallet as usual.
+      rt.subFees.remove(id);
+      let left = Engine.minus(depositBal, icpAmount + cfg.icpFee);
+      let feeHeld = Nat.min(rt.jobFees.get(id) ?? 0, left);
+      if (feeHeld > cfg.icpFee) { rt.subFees.add(id, { amount = feeHeld; to = fees.to; createdAtTime = Int.abs(Time.now()).toNat64() }) };
+    };
+    rt.jobFees.remove(id);
     rt.payFromSub.remove(id);
     Engine.setStatus(
       o,
@@ -320,12 +337,20 @@ mixin (
     if (nakAmount == 0) { return null };
     let o = switch (orders.get(id)) { case (?o) { o }; case null { return null } };
     switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
-    if (rt.inFlight.contains(id) or (not fromDeposit and state.busy)) { return ?o.status };
+    if (rt.inFlight.contains(id) or (not fromDeposit and state.busy) or linkedToHelper(id)) { return ?o.status };
     let ledger : Ext.Ledger = actor (cfg.nakLedger.toText());
     let bal = await ledger.icrc1_balance_of({ owner = self; subaccount = if fromDeposit { ?o.subaccount } else { null } });
+    // The order's NAKSwap fee, if its ICP is still in the deposit account, goes to the fee
+    // wallet (not back to the user later).
+    let icpLeft = if fromDeposit { await (actor (cfg.icpLedger.toText()) : Ext.Ledger).icrc1_balance_of({ owner = self; subaccount = ?o.subaccount }) } else { 0 };
     if (nakAmount + cfg.nakFee > bal or rt.inFlight.contains(id) or (not fromDeposit and state.busy)) { return ?o.status };
     switch (o.status) { case (#needsReview _) {}; case _ { return ?o.status } };
-    if (fromDeposit) { rt.payFromSub.add(id) } else { rt.payFromSub.remove(id) };
+    if (fromDeposit) {
+      rt.payFromSub.add(id);
+      let feeHeld = Nat.min(rt.jobFees.get(id) ?? 0, icpLeft);
+      if (feeHeld > cfg.icpFee) { rt.subFees.add(id, { amount = feeHeld; to = fees.to; createdAtTime = Int.abs(Time.now()).toNat64() }) };
+    } else { rt.payFromSub.remove(id) };
+    rt.jobFees.remove(id);
     Engine.setStatus(o, active, #payoutPending({ icpIn = 0; nakAmount; createdAtTime = Int.abs(Time.now()).toNat64() }));
     ?o.status;
   };
@@ -406,6 +431,7 @@ mixin (
   public shared ({ caller }) func runRecovery() : async () {
     if (not isGuardian(caller)) { return };
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
+    await* Engine.releaseHelpers(state, rt, self);
   };
 
   // Check expired orders for late deposits now (it also runs on every tick). Moves nothing:
@@ -484,9 +510,14 @@ mixin (
         let o = switch (orders.get(oid)) { case (?o) { o }; case null { return #err("no such order") } };
         if (rt.inFlight.contains(oid)) { return #err("order is busy; try again in a minute") };
         switch (o.status) { case (#needsReview _) {}; case _ { return #err("order is not in needs review") } };
+        // A helper linked to an order only hands its funds to that order.
+        switch (rt.helperOrders.get(h)) { case (?linked) { if (linked != oid) { return #err("this helper holds order " # linked.toText() # "'s funds") } }; case null {} };
         { owner = self; subaccount = ?o.subaccount };
       };
-      case null { { owner = self; subaccount = ?Account.straySubaccount } };
+      case null {
+        switch (rt.helperOrders.get(h)) { case (?linked) { return #err("this helper holds order " # linked.toText() # "'s funds; pass that order") }; case null {} };
+        { owner = self; subaccount = ?Account.straySubaccount };
+      };
     };
     if (rt.busyHelpers.contains(h)) { return #err("helper is busy; try again in a minute") };
     rt.busyHelpers.add(h);
@@ -495,7 +526,8 @@ mixin (
     try {
       let a : Ext.Helper = actor (h.toText());
       let r = await a.returnAll(to, cfg.nakFee, cfg.icpFee);
-      switch r { case (#ok _) { rt.helperOrders.remove(h) }; case (#err _) {} };
+      // Unlink only once the helper is really empty (a transfer inside returnAll can fail).
+      switch r { case (#ok _) { if (await a.settled(cfg.icpFee, cfg.nakFee)) { rt.helperOrders.remove(h) } }; case (#err _) {} };
       r;
     } catch (e) { #err(e.message()) } finally {
       rt.busyHelpers.remove(h);
@@ -634,6 +666,8 @@ mixin (
   public shared ({ caller }) func setFee(bps : Nat, to : Principal) : async Bool {
     if (not Orders.isAdmin(state.config, caller)) { return false };
     if (bps > Engine.feeMaxBps or to.isAnonymous() or to == self) { return false };
+    let cfg = state.config;
+    if (to == cfg.pool or to == cfg.icpLedger or to == cfg.nakLedger or rt.exec.helpers.any(func(h : Principal) : Bool = h == to)) { return false };
     fees.bps := bps;
     fees.to := to;
     true;

@@ -48,7 +48,7 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Strict-Transport-Security': 'max-age=31536000',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
 };
@@ -144,6 +144,9 @@ const QUOTE_TTL_MS = 3 * 60_000;
 // ICP than estimated plus normal price drift during the 5–45 min Houdini leg; anything
 // worse (e.g. someone pushing the price just before the router buys) is refunded in ICP.
 const MIN_OUT_TOLERANCE_BPS = 600n;
+// Paying with ICP directly has no Houdini leg (the amount is exact and the swap starts within
+// a minute), so its guaranteed minimum can sit closer to the quote.
+const MIN_OUT_TOLERANCE_DIRECT_BPS = 300n;
 // Quotes are refused a little below the router's own price-impact refund line, so price
 // drift between the quote and the swap doesn't turn an accepted order into a refund.
 const IMPACT_MARGIN_BPS = 150n;
@@ -240,6 +243,9 @@ export function createApp({
   // Optional stricter quote-time price-impact limit (bps); never above the router's.
   maxQuoteImpactBps = null,
   directWindowMs = DIRECT_WINDOW_MS,
+  // Once the site has its own domain: every other host name (e.g. the railway.app one) is
+  // sent there, so there is one site and one admin origin. /api/health stays for Railway.
+  canonicalHost = null,
 }) {
   // The price-impact line quotes must stay under: the router's refund line minus a margin,
   // or the configured limit if that is lower.
@@ -278,6 +284,10 @@ export function createApp({
   const MAX_OPEN_PER_IP = 5;
   const allowView = limiter(120, 60_000);
   const allowTokens = limiter(60, 60_000);
+  // Site-wide ceiling on token searches that reach Houdini (each costs Houdini quota).
+  const allowTokensGlobal = limiter(1_200, 60 * 60_000);
+  const allowTokenSearchHourly = limiter(150, 60 * 60_000);
+  const termCache = new Map(); // search term -> { at, tokens }
   const quoteCache = new Map(); // ip|fromId|amount|refund -> { at, result }
   const issued = new Map(); // quoteId -> { at, blocked, nakOut }
   const houdiniCache = new Map(); // houdiniId -> { at, h }
@@ -286,7 +296,34 @@ export function createApp({
 
   async function tokens(term, user) {
     const key = (term || '').toLowerCase();
-    if (tokenCache.term === key && Date.now() - tokenCache.at < 10 * 60_000) return tokenCache.tokens;
+    // The default list (no search term) is shared by everyone and refreshed every 10 minutes;
+    // it is never subject to the search limits, and a stale copy is served if Houdini fails.
+    if (!key) {
+      if (tokenCache.term === '' && Date.now() - tokenCache.at < 10 * 60_000) return tokenCache.tokens;
+      try {
+        const list = await fetchTokens('', user);
+        tokenCache = { at: Date.now(), term: '', tokens: list };
+        return list;
+      } catch (e) {
+        if (tokenCache.term === '' && tokenCache.tokens.length) return tokenCache.tokens;
+        throw e;
+      }
+    }
+    const hit = termCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) return hit.tokens;
+    // Searches reach Houdini: per visitor per hour and site-wide. Over a limit, an older
+    // result for the same term is still served.
+    if (!allowTokenSearchHourly(user.ip) || !allowTokensGlobal('all')) {
+      if (hit) return hit.tokens;
+      throw Object.assign(new Error('Too many token searches right now. Pick from the list, or try again in a few minutes.'), { status: 429, expose: true });
+    }
+    const list = await fetchTokens(key, user);
+    for (const [k, v] of termCache) if (Date.now() - v.at >= 10 * 60_000) termCache.delete(k);
+    if (termCache.size < 2_000) termCache.set(key, { at: Date.now(), tokens: list });
+    return list;
+  }
+
+  async function fetchTokens(key, user) {
     const list = (await houdini.searchTokens(key, user)).map((t) => ({
       id: t.id,
       symbol: t.symbol,
@@ -298,7 +335,6 @@ export function createApp({
       decimals: t.decimals,
       usd: Number(t.price) > 0 ? Number(t.price) : null,
     }));
-    if (!key) tokenCache = { at: Date.now(), term: key, tokens: list };
     return list;
   }
 
@@ -430,7 +466,7 @@ export function createApp({
       icpIn: icpE8s,
       nakswapFeeIcp: p.nakswapFee,
       nakOut: p.nakOut,
-      guaranteedNak: (p.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n,
+      guaranteedNak: (p.nakOut * (10_000n - MIN_OUT_TOLERANCE_DIRECT_BPS)) / 10_000n,
       impactBps: p.impactBps,
       blocked,
       suggestAmount,
@@ -444,7 +480,7 @@ export function createApp({
   }
 
   async function createDirectOrder(q, recipientP, refundToP, user) {
-    const minNakOut = (q.nakOut * (10_000n - MIN_OUT_TOLERANCE_BPS)) / 10_000n;
+    const minNakOut = (q.nakOut * (10_000n - MIN_OUT_TOLERANCE_DIRECT_BPS)) / 10_000n;
     const order = await ic.createOrder({ recipient: recipientP, refundTo: refundToP, minNakOut: minNakOut > 0n ? minNakOut : null });
     // Marks the order as paid directly (so the router keeps it for the full window instead of
     // dropping it as unpaired after 15 minutes). Without it, don't show where to pay.
@@ -566,6 +602,15 @@ export function createApp({
     ];
   }
 
+  // At most one router poke per order every pokeEveryMs, however many tabs are polling.
+  async function nudge(orderId) {
+    const k = String(orderId);
+    if (Date.now() - (lastPoke.get(k) || 0) < pokeEveryMs) return;
+    lastPoke.set(k, Date.now());
+    if (lastPoke.size > 5_000) lastPoke.clear();
+    await ic.poke(orderId).catch(() => {});
+  }
+
   async function getOrder(id, key, user) {
     if (!allowView(user.ip)) return [429, { error: 'too many requests, slow down' }];
     const given = typeof key === 'string' ? key : '';
@@ -589,13 +634,10 @@ export function createApp({
           depositCache.set(k, { at: Date.now(), bal: received });
           if (depositCache.size > 5_000) depositCache.clear();
         }
-        // ICP has landed: nudge the router instead of waiting for its next pass.
-        if (stage === 'awaitingDeposit' && received > 0n && !(Date.now() - (lastPoke.get(k) || 0) < pokeEveryMs)) {
-          lastPoke.set(k, Date.now());
-          if (lastPoke.size > 5_000) lastPoke.clear();
-          await ic.poke(order.id).catch(() => {});
-        }
       }
+      // ICP has landed, or NAK / a refund is ready to go: nudge the router instead of waiting
+      // for its next pass.
+      if ((stage === 'awaitingDeposit' && received > 0n) || stage === 'payoutPending' || stage === 'refundPending') await nudge(order.id);
       const fresh = (await ic.getOrder(BigInt(id))) ?? order;
       return [
         200,
@@ -646,11 +688,8 @@ export function createApp({
     // Houdini says ICP was sent; nudge the router instead of waiting for its next tick.
     // At most one poke per order every pokeEveryMs, however many tabs are polling.
     const k = String(order.id);
-    if (hd?.status === 4 && statusName(order.status) === 'awaitingDeposit' && !(Date.now() - (lastPoke.get(k) || 0) < pokeEveryMs)) {
-      lastPoke.set(k, Date.now());
-      if (lastPoke.size > 5_000) lastPoke.clear();
-      await ic.poke(order.id).catch(() => {});
-    }
+    const st = statusName(order.status);
+    if ((hd?.status === 4 && st === 'awaitingDeposit') || st === 'payoutPending' || st === 'refundPending') await nudge(order.id);
     const fresh = (await ic.getOrder(BigInt(id))) ?? order;
     return [
       200,
@@ -725,6 +764,11 @@ export function createApp({
       return json(res, 400, { error: 'bad request' });
     }
     const user = userContext(req);
+    const host = String(req.headers.host || '').toLowerCase();
+    if (canonicalHost && host && host !== canonicalHost && url.pathname !== '/api/health' && (req.method === 'GET' || req.method === 'HEAD')) {
+      res.writeHead(301, { ...SECURITY_HEADERS, Location: `https://${canonicalHost}${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     try {
       if (req.method === 'OPTIONS') {
         res.writeHead(204, SECURITY_HEADERS);

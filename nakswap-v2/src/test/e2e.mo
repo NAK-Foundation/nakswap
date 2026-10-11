@@ -21,6 +21,8 @@ import MockSwapPool "../mocks/MockSwapPool";
 import HelperMod "../helper/main";
 import RouterMod "../router/main";
 import Types "../router/types";
+import Engine "../router/lib/Engine";
+import Time "mo:core/Time";
 import Stranger "Stranger";
 
 actor Test {
@@ -297,12 +299,14 @@ actor Test {
     check("stray deposit recovered (" # debug_show rec # ")", rec == #ok({ icp = ICP - icpFee; nak = 0 }) and (await icp.icrc1_balance_of({ owner = frank; subaccount = null })) == ICP - icpFee);
     check("recover refuses unknown order ids", switch (await router.recoverDeposit(o7.id + 100, frank)) { case (#err _) { true }; case _ { false } });
     // 7b. late deposit: a direct-ICP order paid after its window is revived and swapped.
+    // Finished orders are watched too, so count relative to what's watched already.
+    let w0 = (await router.publicStats()).lateWatched;
     let lucy = Principal.fromBlob("\0A\10");
     let o7c = await newOrder(lucy, null);
     check("direct ICP order marked", await router.attachHoudini(o7c.id, "icp-direct"));
     ignore await router.poke(o7c.id);
     check("direct order expired", statusTag(await statusOf(o7c.id)) == "expired");
-    check("expired orders are watched for late deposits", (await router.publicStats()).lateWatched == 2);
+    check("expired orders are watched for late deposits", (await router.publicStats()).lateWatched == w0 + 1);
     ignore await router.checkLateDeposits();
     check("nothing arrived: stays expired", statusTag(await statusOf(o7c.id)) == "expired");
     await houdiniPays(o7c.depositAccountId, 15_000); // dust, less than a refund would cost
@@ -314,10 +318,10 @@ actor Test {
     check("late ICP revives the order", statusTag(await statusOf(o7c.id)) == "awaitingDeposit");
     check("and it is swapped (got " # statusTag(await pokeUntilSettled(o7c.id)) # ")", statusTag(await statusOf(o7c.id)) == "completed");
     check("lucy got her NAK", (await nak.icrc1_balance_of({ owner = lucy; subaccount = null })) > 0);
-    check("revived order no longer watched", (await router.publicStats()).lateWatched == 1);
+    check("revived order left the watch, then rejoined it once completed", (await router.publicStats()).lateWatched == w0 + 1);
     check("reopen works", (await router.reopen(o7.id)) == ?#awaitingDeposit);
     ignore await router.checkLateDeposits();
-    check("reopened order dropped from the watch", (await router.publicStats()).lateWatched == 0);
+    check("reopened order dropped from the watch", (await router.publicStats()).lateWatched == w0);
     // Every watched order gets its turn: 15 expired orders, only the last one is paid; checks
     // take the most overdue first, so the second pass reaches it.
     var lastLate = o7c;
@@ -327,12 +331,12 @@ actor Test {
       ignore await router.poke(o.id);
       lastLate := o;
     };
-    check("15 expired orders watched", (await router.publicStats()).lateWatched == 15);
+    check("15 expired orders watched", (await router.publicStats()).lateWatched == w0 + 15);
     await houdiniPays(lastLate.depositAccountId, ICP);
     ignore await router.checkLateDeposits();
     ignore await router.checkLateDeposits();
     check("the newest one isn't starved (" # statusTag(await statusOf(lastLate.id)) # ")", statusTag(await statusOf(lastLate.id)) == "awaitingDeposit");
-    check("and only it left the watch", (await router.publicStats()).lateWatched == 14);
+    check("and only it left the watch", (await router.publicStats()).lateWatched == w0 + 14);
     ignore await router.setConfig(cfg);
 
     // ---- 8. access control ----
@@ -468,6 +472,129 @@ actor Test {
     let kim = Principal.fromBlob("\0A\08");
     check("admin recovers stray funds", (await router.recoverStray(kim)) == #ok({ icp = ICP / 10 - 2 * icpFee; nak = 0 }));
     check("main NAK untouched by helper orders", (await nak.icrc1_balance_of(routerMain)) == mainNakBefore);
+
+    // ---- 11. audit 2026-10-10 scenarios ----
+    Debug.print("11a. recovery waits until the helper is really empty");
+    let va = Principal.fromBlob("\0B\01");
+    let oa = await newOrder(va, null);
+    await houdiniPays(oa.depositAccountId, 2 * ICP);
+    await pool.setBreakNextSwap(true);
+    ignore await pokeUntilSettled(oa.id);
+    var wa = 99;
+    var ia = 0;
+    for (info in (await router.helpers()).values()) { if (info.holdsOrder == ?oa.id) { wa := ia }; ia += 1 };
+    check("helper holds the order", wa < 3);
+    await pool.retryFailed(); // ICPSwap pays the NAK to the helper
+    await nak.setFailTransfers(1); // ...but the helper's NAK transfer back fails once
+    await router.runRecovery();
+    check("order stays in review, helper still linked (" # statusTag(await statusOf(oa.id)) # ")",
+      statusTag(await statusOf(oa.id)).startsWith(#text "needsReview") and (await router.helpers())[wa].holdsOrder == ?oa.id);
+    await router.runRecovery(); // the ledger works again
+    check("then resolved to a payout (" # statusTag(await pokeUntilSettled(oa.id)) # ")", statusTag(await statusOf(oa.id)) == "completed");
+    check("va got her NAK, not a fee-sized refund", (await nak.icrc1_balance_of({ owner = va; subaccount = null })) > 100_000 * NAK);
+    check("helper back in rotation", not (await router.helpers())[wa].quarantined);
+
+    Debug.print("11b. helpers knocked out by pool hiccups come back by themselves");
+    let vb = Principal.fromBlob("\0B\02");
+    let ob = await newOrder(vb, null);
+    await houdiniPays(ob.depositAccountId, ICP);
+    await pool.setFailTxQuery(true);
+    ignore await router.poke(ob.id);
+    ignore await router.poke(ob.id);
+    ignore await router.poke(ob.id);
+    await pool.setFailTxQuery(false);
+    check("all three helpers out of rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = i.quarantined));
+    check("the order just waits (" # statusTag(await statusOf(ob.id)) # ")", statusTag(await statusOf(ob.id)) == "awaitingDeposit");
+    await router.runRecovery();
+    // Helper balances: one still holds 0.1 ICP a stranger sent it in 10f (more than dust).
+    var held = 99;
+    var k = 0;
+    for (h in hIds.values()) { if ((await icp.icrc1_balance_of({ owner = h; subaccount = null })) > ICP / 100) { held := k }; k += 1 };
+    let infosB = await router.helpers();
+    var okB = true;
+    for (i in Nat.range(0, 3)) { if (infosB[i].quarantined != (i == held)) { okB := false } };
+    check("empty helpers released, the one holding 0.1 ICP waits for the admin (held " # held.toText() # ")", okB and held < 3);
+    check("admin moves it to stray", switch (await router.helperRecover(held, null)) { case (#ok _) { true }; case _ { false } });
+    await router.runRecovery();
+    check("all helpers back in rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined));
+    check("and the order completes (" # statusTag(await pokeUntilSettled(ob.id)) # ")", statusTag(await statusOf(ob.id)) == "completed");
+    Debug.print("11c. a second payment to a finished order is swapped too");
+    let vc = Principal.fromBlob("\0B\03");
+    let oc = await newOrder(vc, null);
+    ignore await router.attachHoudini(oc.id, "icp-direct");
+    await houdiniPays(oc.depositAccountId, ICP / 20); // a 'test' transfer below the minimum
+    check("test transfer refunded", statusTag(await pokeUntilSettled(oc.id)) == "refunded");
+    await houdiniPays(oc.depositAccountId, 2 * ICP); // the real payment
+    ignore await router.checkLateDeposits();
+    check("real payment picked up (" # statusTag(await statusOf(oc.id)) # ")", statusTag(await statusOf(oc.id)) == "awaitingDeposit");
+    check("and swapped", statusTag(await pokeUntilSettled(oc.id)) == "completed" and (await nak.icrc1_balance_of({ owner = vc; subaccount = null })) > 0);
+    ignore await router.sweepFees();
+    ignore await router.checkLateDeposits();
+    check("a completed order with only its swept fee isn't revived", statusTag(await statusOf(oc.id)) == "completed");
+
+    Debug.print("11d. dust is not a deposit; reserved principals");
+    let od = await newOrder(alice, null);
+    await houdiniPays(od.depositAccountId, 15_000);
+    ignore await router.poke(od.id);
+    check("dust leaves the order waiting, not in review", statusTag(await statusOf(od.id)) == "awaitingDeposit");
+    check("a helper can't be the recipient", switch (await router.createOrder({ recipient = hIds[1]; refundTo = null; minNakOut = null })) { case (#err(#invalidRecipient)) { true }; case _ { false } });
+    check("the pool can't be the refund address", switch (await router.createOrder({ recipient = alice; refundTo = ?poolId; minNakOut = null })) { case (#err(#invalidRecipient)) { true }; case _ { false } });
+    check("a ledger can't be the fee wallet", not (await router.setFee(100, nakId)));
+
+    Debug.print("11f. admin force-payout keeps the fee; helpers holding real funds wait for the admin");
+    let vf = Principal.fromBlob("\0B\06");
+    let of = await newOrder(vf, null);
+    await houdiniPays(of.depositAccountId, 2 * ICP);
+    await pool.setBreakNextSwap(true);
+    ignore await pokeUntilSettled(of.id);
+    var wf = 99;
+    var jf = 0;
+    for (info in (await router.helpers()).values()) { if (info.holdsOrder == ?of.id) { wf := jf }; jf += 1 };
+    check("helper holds the parked order", wf < 3);
+    check("a linked helper's funds can't go to stray", switch (await router.helperRecover(wf, null)) { case (#err _) { true }; case _ { false } });
+    check("force-payout refused while a helper holds the funds", statusTag((await router.forcePayout(of.id, NAK, true)) ?? #expired).startsWith(#text "needsReview"));
+    await pool.retryFailed();
+    check("admin returns the helper's funds to the order", switch (await router.helperRecover(wf, ?of.id)) { case (#ok _) { true }; case _ { false } });
+    let nakInDeposit = await nak.icrc1_balance_of({ owner = routerId; subaccount = ?of.depositSubaccount });
+    check("force-payout accepted", statusTag((await router.forcePayout(of.id, nakInDeposit - nakFee, true)) ?? #expired) == "payoutPending");
+    check("paid out", statusTag(await pokeUntilSettled(of.id)) == "completed");
+    let vfIcp = await icp.icrc1_balance_of({ owner = vf; subaccount = null });
+    let feeWalletBeforeF = await icp.icrc1_balance_of({ owner = feeWallet; subaccount = null });
+    ignore await router.sweepFees();
+    ignore await router.checkLateDeposits();
+    ignore await pokeUntilSettled(of.id);
+    check("the fee went to the fee wallet", (await icp.icrc1_balance_of({ owner = feeWallet; subaccount = null })) > feeWalletBeforeF);
+    check("and not back to the user", (await icp.icrc1_balance_of({ owner = vf; subaccount = null })) == vfIcp and statusTag(await statusOf(of.id)) == "completed");
+    ignore await router.clearHelper(wf);
+    // A quarantined helper with no order linked but more than dust in it stays out for the admin.
+    let og = await newOrder(vf, null);
+    await houdiniPays(og.depositAccountId, ICP);
+    await pool.setFailTxQuery(true);
+    ignore await router.poke(og.id);
+    await pool.setFailTxQuery(false);
+    var wg = 99;
+    var jg = 0;
+    for (info in (await router.helpers()).values()) { if (info.quarantined and info.holdsOrder == null) { wg := jg }; jg += 1 };
+    check("one helper out, unlinked", wg < 3);
+    ignore await icp.mint({ owner = hIds[wg]; subaccount = null }, ICP);
+    await router.runRecovery();
+    check("holding 1 ICP: stays out of rotation", (await router.helpers())[wg].quarantined);
+    check("admin sends it to the stray account", switch (await router.helperRecover(wg, null)) { case (#ok _) { true }; case _ { false } });
+    await router.runRecovery();
+    check("then it's released", not (await router.helpers())[wg].quarantined);
+    check("and the waiting order completes", statusTag(await pokeUntilSettled(og.id)) == "completed");
+
+    Debug.print("11e. price guard");
+    let now = Time.now();
+    let ref : Types.PriceRef = { var probe = 0; var at = 0 };
+    check("no reference yet: allowed", Engine.priceSane(ref, 900, now));
+    Engine.updatePriceRef(ref, 1_000, now);
+    check("2% worse: allowed", Engine.priceSane(ref, 980, now));
+    check("4% worse: waits", not Engine.priceSane(ref, 960, now));
+    check("better price: allowed", Engine.priceSane(ref, 1_100, now));
+    check("stale reference ignored", Engine.priceSane(ref, 500, now + 700_000_000_000));
+    for (_ in Nat.range(0, 6)) { Engine.updatePriceRef(ref, 960, now) };
+    check("a real move is followed within a few ticks", Engine.priceSane(ref, 960, now));
 
     // ---- 9. hardening ----
     Debug.print("9. hardening");

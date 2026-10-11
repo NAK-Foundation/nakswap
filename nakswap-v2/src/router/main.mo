@@ -191,8 +191,9 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     if (rt.quarantined.size() > 0) { await* Engine.releaseHelpers(state, rt, self) };
 
     ignore await* Engine.runFeeSweep(state, fees, Engine.feeAutoSweepE8s);
-    // Hourly: pay the stray account out once it holds enough (two ledger queries).
-    if (tickCount % 60 == 0) { await* Engine.payoutStray(state, rt, self) };
+    // Every 12 hours (720 ticks of 60 s): pay the stray account out once it holds enough
+    // (one ledger query when there's nothing to send).
+    if (tickCount % 720 == 0) { await* Engine.payoutStray(state, rt, self) };
     forgetOldHoudiniIds(now);
   };
 

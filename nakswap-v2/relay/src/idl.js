@@ -80,6 +80,7 @@ export const routerIdl = ({ IDL }) => {
     attachHoudini: IDL.Func([IDL.Nat, IDL.Text], [IDL.Bool], []),
     cancelUnfunded: IDL.Func([IDL.Nat], [IDL.Bool], []),
     getOrder: IDL.Func([IDL.Nat], [IDL.Opt(OrderView)], ['query']),
+    activeOrderIds: IDL.Func([], [IDL.Vec(IDL.Nat)], ['query']),
     // Admin-only (used by scripts/router-admin.mjs, never by the relay itself).
     listOrders: IDL.Func([IDL.Nat, IDL.Nat], [IDL.Vec(OrderView)], ['query']),
     forceRefund: IDL.Func([IDL.Nat, IDL.Nat, IDL.Bool], [IDL.Opt(Status)], []),

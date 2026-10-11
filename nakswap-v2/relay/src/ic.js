@@ -184,6 +184,7 @@ export async function createIc({ host, identitySeedHex, routerId, local }) {
     attachHoudini: (id, houdiniId) => needRouter().attachHoudini(id, houdiniId),
     cancelUnfunded: (id) => needRouter().cancelUnfunded(id),
     getOrder: async (id) => (await needRouter().getOrder(id))[0] ?? null,
+    activeOrderIds: () => needRouter().activeOrderIds(),
     poke: (id) => needRouter().poke(id),
 
     // Mock-mode only: send ICP from the relay identity to an account-id hex, like an

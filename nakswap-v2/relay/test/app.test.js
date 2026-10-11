@@ -3,7 +3,7 @@ import http from 'node:http';
 import { test } from 'node:test';
 import { Principal } from '@icp-sdk/core/principal';
 import { crc32, encodeIcrcAccount } from '../src/account.js';
-import { createApp } from '../src/app.js';
+import { createApp, limitKey } from '../src/app.js';
 import { createHoudini } from '../src/houdini.js';
 import { createMockHoudini } from '../src/mockHoudini.js';
 
@@ -587,5 +587,55 @@ test('origin lock with a domain: direct page hits redirect there, API hits are r
     assert.equal((await rawCall(port, 'GET', '/', 'www.nakswap.lol', undefined, { 'x-origin-secret': secret })).headers.location, 'https://nakswap.lol/');
   } finally {
     server.close();
+  }
+});
+
+test('audit 2026-10-11: IPv6 limit keys, cached quotes don\'t spend the site budget, direct-order share, non-blocking poke', async () => {
+  // IPv6 visitors are limited per /64, written in full; IPv4-mapped addresses as IPv4.
+  assert.equal(limitKey('2a01:4f8::1'), '2a01:4f8:0:0::/64');
+  assert.equal(limitKey('2a01:04f8:0000:0000:ffff::2'), '2a01:4f8:0:0::/64');
+  assert.equal(limitKey('2607:fb90:1a2b:3c4d:1:2:3:4'), '2607:fb90:1a2b:3c4d::/64');
+  assert.notEqual(limitKey('2607:fb90:1a2b:1::1'), limitKey('2607:fb90:1a2b:2::1'));
+  assert.equal(limitKey('::ffff:203.0.113.5'), '203.0.113.5');
+  assert.equal(limitKey('198.51.100.4'), '198.51.100.4');
+  assert.equal(limitKey('2607:fb90:1a2b:3c4d::1', 48), '2607:fb90:1a2b::/48');
+  assert.equal(limitKey('198.51.100.4', 48), '198.51.100.4');
+
+  const ic = fakeIc();
+  const base = createMockHoudini({ payIcp: async () => {} });
+  let quoteCalls = 0;
+  let sentIp = null;
+  const houdini = Object.assign(Object.create(base), {
+    async quotesToIcp(a) { quoteCalls += 1; sentIp = a.user.rawIp; return base.quotesToIcp(a); },
+  });
+  const { call, close } = await serve(createApp({ houdini, ic, orderLimitPerHour: 10, pokeEveryMs: 0 }));
+  try {
+    // Repeats of one quote come from the cache: one Houdini call.
+    for (let i = 0; i < 5; i++) await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' }, { 'x-real-ip': '2a01:4f8::7' });
+    assert.equal(quoteCalls, 1);
+    assert.equal(sentIp, '2a01:4f8::7', 'Houdini gets the visitor\'s own address, not a prefix');
+    // Pay-with-ICP orders get 40% of the hourly order budget (4 of 10 here).
+    const codes = [];
+    for (let i = 0; i < 5; i++) {
+      const ip = `203.0.113.${50 + i}`;
+      const q = await call('POST', '/api/quote-icp', { amount: '1' }, { 'x-real-ip': ip });
+      codes.push((await call('POST', '/api/orders', { quoteId: q.body.quoteId, recipient: ALICE }, { 'x-real-ip': ip })).code);
+    }
+    assert.deepEqual(codes, [201, 201, 201, 201, 503]);
+    // ...while Houdini-route orders still go through.
+    const hq = await call('POST', '/api/quote', { fromId: 'mock-usdt', amount: '100' }, { 'x-real-ip': '203.0.113.90' });
+    const o = await call('POST', '/api/orders', { quoteId: hq.body.routes[0].quoteId, recipient: ALICE }, { 'x-real-ip': '203.0.113.90' });
+    assert.equal(o.code, 201);
+    // Polling an order never waits for the router poke.
+    ic.orders.get(BigInt(o.body.orderId)).status = { payoutPending: { icpIn: 1n, nakAmount: 1n, createdAtTime: 1n } };
+    let poked = 0;
+    ic.poke = () => { poked += 1; return new Promise(() => {}); }; // never answers
+    const t0 = Date.now();
+    const v = await call('GET', `/api/orders/${o.body.orderId}`, undefined, { 'x-order-key': o.body.orderKey, 'x-real-ip': '203.0.113.90' });
+    assert.equal(v.code, 200);
+    assert.equal(poked, 1);
+    assert.ok(Date.now() - t0 < 2_000);
+  } finally {
+    close();
   }
 });

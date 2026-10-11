@@ -206,6 +206,24 @@ else {
   if (!EXPECT.operators.includes(relay.operator)) add('crit', `Swap site uses an unexpected operator: ${relay.operator ?? 'none'}`);
 }
 
+if (relay && !/^[0-9a-f]{7,40}$/.test(String(relay.commit || ''))) add('crit', 'Swap site does not report its commit (every release does). Check Railway.');
+
+// The hosting address must stay locked: only reachable through Cloudflare (pages redirect
+// to the site, everything else is refused).
+const ORIGIN = process.env.ORIGIN_URL || 'https://relay-production-e42e.up.railway.app';
+if (ORIGIN !== 'off') {
+  try {
+    const page = await fetch(`${ORIGIN}/`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+    const api = await fetch(`${ORIGIN}/api/stats`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+    const toSite = page.status === 301 && String(page.headers.get('location') || '').startsWith(RELAY);
+    integrity.originLock = toSite && api.status === 403 ? 'on' : { page: page.status, api: api.status };
+    if (!(toSite && api.status === 403)) add('crit', `Hosting address answers directly (page ${page.status}, API ${api.status}): the Cloudflare-only lock is off.`);
+  } catch {
+    integrity.originLock = 'unreachable';
+    add('warn', 'Could not check the hosting address lock (unreachable)');
+  }
+}
+
 // The pages the site serves must be byte-for-byte this checkout's files: a changed swap page
 // (e.g. fake deposit addresses after a hosting-account takeover) shows up here even when
 // nothing changed on GitHub. A deploy in progress can differ for a minute or two, so a
@@ -239,6 +257,29 @@ if (deployed) {
   try {
     git('cat-file', '-e', `${deployed}^{commit}`);
     gitOk = true;
+    // Only commits on the live branch are ever released.
+    try {
+      git('fetch', '-q', 'origin', '+refs/heads/nakswap-v2-live:refs/remotes/origin/nakswap-v2-live');
+    } catch {
+      // offline: check against what's here
+    }
+    let haveBranch = true;
+    try {
+      git('rev-parse', '--verify', '-q', 'origin/nakswap-v2-live');
+    } catch {
+      haveBranch = false;
+      add('warn', 'Could not check the deployed commit against the nakswap-v2-live branch (branch not fetched)');
+    }
+    if (haveBranch) {
+      try {
+        git('merge-base', '--is-ancestor', deployed, 'origin/nakswap-v2-live');
+      } catch {
+        add('crit', `Swap site runs commit ${deployed}, which isn't on the nakswap-v2-live branch. Pause the router and check Railway.`);
+      }
+    }
+    if (process.env.EXPECT_RELAY_COMMIT && !deployed.startsWith(process.env.EXPECT_RELAY_COMMIT)) {
+      add('warn', `Swap site runs ${deployed.slice(0, 7)}, expected ${process.env.EXPECT_RELAY_COMMIT.slice(0, 7)}`);
+    }
   } catch {
     try {
       git('rev-parse', '--git-dir');

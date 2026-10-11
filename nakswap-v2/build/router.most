@@ -115,6 +115,7 @@ actor {
     };
   stable payFromSub :
     {var root : Node__620761243<Nat>; var size : Nat__227979830};
+  stable priceRef : {var at : Int; var probe : Nat};
   stable privacy : {var redactCursor : Nat; var secret : Blob};
   stable quarantined :
     {var root : Node__620761243<Principal>; var size : Nat__227979830};

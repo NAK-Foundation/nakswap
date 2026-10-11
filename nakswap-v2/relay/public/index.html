@@ -189,6 +189,10 @@
   .track input { flex: 1; min-width: 0; background: var(--nak-surface-hi); border: 1px solid var(--nak-border); border-radius: var(--radius); padding: 10px 12px; font-family: var(--font-mono); font-size: 14px; }
   .recent { margin-top: 10px; font-size: 13px; color: var(--nak-text-muted); display: flex; flex-wrap: wrap; gap: 8px; }
 
+  .foreign { border: 1px solid var(--nak-warn); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 20px; font-size: 14px; line-height: 1.5; }
+  .foreign b { color: var(--nak-warn); font-weight: 600; }
+  .foreign .mono { word-break: break-all; }
+  .foreign .btn { margin-top: 10px; padding: 8px 14px; font-size: 13px; }
   .deposit { border: 1px solid var(--nak-accent); background: var(--nak-accent-soft); border-radius: var(--radius); padding: 16px; margin-bottom: 20px; }
   .deposit .amt { font-family: var(--font-mono); font-size: 22px; }
   .addr { font-family: var(--font-mono); font-size: 13px; word-break: break-all; margin: 6px 0 10px; }
@@ -351,6 +355,10 @@
           <div><span class="label" style="margin:0">Order</span><div class="mono" style="font-size:20px" id="orderTitle"></div><div class="hint" style="margin-top:4px">Order code <span class="mono" id="orderCode"></span> <button class="btn copy" style="padding:2px 8px;font-size:12px" type="button" data-copy="orderCode">Copy</button><br>Save it to track this swap from any device.</div></div>
           <button class="btn" id="backBtn" type="button">New swap</button>
         </div>
+        <div class="foreign" id="foreignNote" hidden>
+          <b>This order wasn’t started on this device.</b> Its NAK goes to <span class="mono" id="foreignTo">…</span>. Only send funds to it if you created this swap yourself. NAKSwap and its support never ask you to pay into an order someone else sent you.
+          <div><button class="btn" type="button" id="foreignOk">I created this order, show where to pay</button></div>
+        </div>
         <div class="deposit" id="depositBox" hidden>
           <span class="label">Send exactly</span>
           <div class="amt" id="depAmt"></div>
@@ -411,7 +419,7 @@
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
     return data;
   };
   const store = {
@@ -855,20 +863,57 @@
     if (state) el.classList.add(state);
     $(`${id}sub`).textContent = text;
   }
+  // The order on screen. Polls for any other order (an earlier one still in flight) are
+  // dropped, so one order's details can never be drawn into another's view.
+  let currentOrder = null;
+  // Orders opened from a link (not created or confirmed on this device) hide where to pay
+  // until the visitor confirms they set it up: a scammer can't use a NAKSwap-branded order
+  // page as a payment request.
+  let foreignHold = false;
+  function knownHere(code) {
+    return store.get('nak.recent', []).includes(code) || store.get(`nak.order.${code}`, null) != null;
+  }
   async function showOrder(code) {
+    currentOrder = code;
+    clearTimeout(pollTimer);
     $('swapView').hidden = true; $('orderView').hidden = false;
     // On phones the card sits below the intro: bring it into view.
     if (window.innerWidth < 1000) $('orderView').scrollIntoView({ block: 'start' });
     $('orderTitle').textContent = `#${code.split('-')[0]}`;
     $('orderCode').textContent = code;
+    $('orderErr').textContent = '';
+    $('orderFacts').innerHTML = '';
+    for (const id of ['s1', 's2', 's3']) setStop(id, null, '');
+    $('orderRail').className = 'rail';
+    foreignHold = !knownHere(code);
+    $('foreignNote').hidden = !foreignHold;
+    $('foreignTo').textContent = '…';
+    $('depositBox').hidden = true;
     const saved = store.get(`nak.order.${code}`, null);
     if (saved) renderDeposit(saved.send);
-    clearInterval(pollTimer);
     await pollOrder(code);
-    pollTimer = setInterval(() => pollOrder(code), 8000);
   }
+  $('foreignOk').addEventListener('click', () => {
+    if (!currentOrder) return;
+    const recent = store.get('nak.recent', []).filter((x) => x !== currentOrder && /-/.test(x));
+    store.set('nak.recent', [currentOrder, ...recent].slice(0, 8));
+    foreignHold = false;
+    $('foreignNote').hidden = true;
+    clearTimeout(pollTimer);
+    pollOrder(currentOrder);
+  });
+  // Poll fast while something is moving, slower while waiting on Houdiniswap, rarely once
+  // the order is expired or in review, never once it's done or while the tab is hidden.
+  function nextPoll(code, ms) {
+    clearTimeout(pollTimer);
+    if (ms == null || code !== currentOrder) return;
+    pollTimer = setTimeout(() => pollOrder(code), ms);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && currentOrder) { clearTimeout(pollTimer); pollOrder(currentOrder); }
+  });
   function renderDeposit(send) {
-    if (!send || !send.to) { $('depositBox').hidden = true; return; }
+    if (!send || !send.to || foreignHold) { $('depositBox').hidden = true; return; }
     $('depositBox').hidden = false;
     const isIcp = send.chain === 'icp' && send.symbol === 'ICP';
     $('depAmt').textContent = send.amount ? `${send.amount} ${send.symbol}` : `ICP, between ${fmt(health?.limits?.minOrderIcp ?? 0.1, 4)} and ${fmt(health?.limits?.maxOrderIcp ?? 50, 2)}`;
@@ -885,11 +930,16 @@
     $('depExpires').textContent = exp ? `Send before ${exp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
   }
   async function pollOrder(code) {
+    if (code !== currentOrder) return;
+    if (document.hidden) return; // resumed by visibilitychange
+    let delay = 15_000;
     try {
       const [id, key] = code.split('-');
       // The key travels in a header, not the URL, so it never lands in access logs.
       const o = await api(`/api/orders/${id}`, undefined, { 'x-order-key': key || '' });
+      if (code !== currentOrder) return;
       $('orderErr').textContent = '';
+      $('foreignTo').textContent = o.recipient;
       const h = o.houdini;
       const direct = o.route === 'icp';
       $('s1big').textContent = direct ? 'ICP sent to your deposit account' : 'Deposit with Houdiniswap';
@@ -903,7 +953,7 @@
         if (!arrived && o.stage === 'awaitingDeposit') renderDeposit({ ...(saved?.send || {}), symbol: 'ICP', chain: 'icp', to: o.deposit.to, icrc: o.deposit.icrc, expires: o.deposit.expires });
         else $('depositBox').hidden = true;
         if (arrived) setStop('s1', 'done', received > 0n ? `Received ${fmt(e8(received), 8)} ICP` : 'ICP received');
-        else if (o.stage === 'expired') setStop('s1', 'fail', 'No ICP arrived in time. Start a new swap instead of sending to this order. If you already sent ICP, the router keeps checking for 3 days and swaps or refunds it automatically, usually within about 10 minutes.');
+        else if (o.stage === 'expired') setStop('s1', 'fail', 'No ICP arrived in time. Start a new swap instead of sending to this order. If you already sent ICP, the router keeps checking for 3 days and swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.');
         else setStop('s1', 'active', 'Waiting for your ICP. The swap starts within about a minute of it arriving.');
       }
       else if (!h) setStop('s1', 'active', 'Linking the Houdiniswap order…');
@@ -916,32 +966,40 @@
         setStop('s2', 'done', `Swapped ${fmt(e8(d.icpIn), 4)} ICP on ICPSwap`);
         setStop('s3', 'done', `${fmt(e8(d.nakOut), 2)} NAK delivered to ${o.recipient} (NAK ledger block ${d.block})`);
         $('orderRail').className = 'rail lit-2';
-        clearInterval(pollTimer);
+        delay = null;
       } else if (o.stage === 'refunded') {
         const reason = Object.keys(d.reason || {})[0];
         setStop('s2', 'fail', `Refunded ${fmt(e8(d.icpAmount), 4)} ICP to ${o.refundTo} because ${REASONS[reason] || reason} (ICP ledger block ${d.block})`);
         setStop('s3', null, 'Not sent');
-        clearInterval(pollTimer);
+        delay = null;
       } else if (o.stage === 'expired') {
-        if (direct && arrived) setStop('s2', 'active', 'Your ICP arrived after the window. The router swaps or refunds it automatically, usually within about 10 minutes.');
-        else setStop('s2', direct ? null : 'fail', direct ? '' : 'No ICP arrived before the order expired. If Houdiniswap delivers late (within 3 days), the router swaps or refunds it automatically, usually within about 10 minutes.');
+        if (direct && arrived) setStop('s2', 'active', 'Your ICP arrived after the window. The router swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.');
+        else setStop('s2', direct ? null : 'fail', direct ? '' : 'No ICP arrived before the order expired. If Houdiniswap delivers late (within 3 days), the router swaps or refunds it automatically: within about 10 minutes in the first hours, later within a few hours.');
         setStop('s3', null, '');
+        delay = arrived ? 20_000 : 60_000;
       } else if (o.stage === 'needsReview') {
         setStop('s2', 'fail', `Held for manual review. Your funds are held, not lost: message us on Telegram @NAKSTOKEN with this order code.`);
         setStop('s3', null, '');
+        delay = 60_000;
       } else {
         const t = { awaitingDeposit: hs === 4 ? 'ICP received, starting the swap' : direct ? '' : 'Waiting for ICP from Houdiniswap', swapping: 'Swapping ICP for NAK on ICPSwap', payoutPending: 'Swap done, sending NAK', refundPending: 'Returning ICP to your principal' }[o.stage] ?? o.stage;
         setStop('s2', o.stage !== 'awaitingDeposit' || hs === 4 ? 'active' : null, t);
         setStop('s3', o.stage === 'payoutPending' ? 'active' : null, o.stage === 'payoutPending' ? `Sending ${fmt(e8(d.nakAmount), 2)} NAK to ${o.recipient}` : '');
         $('orderRail').className = hs === 4 ? 'rail lit-1' : 'rail';
+        // Moving (ICP arrived, swapping, paying out): every 5 s. Waiting for a deposit: a
+        // direct payment every 8 s, Houdiniswap every 20 s.
+        delay = o.stage !== 'awaitingDeposit' || arrived ? 5_000 : direct ? 8_000 : 20_000;
       }
       $('orderFacts').innerHTML = `
         <dt>NAK recipient</dt><dd style="word-break:break-all;max-width:260px">${esc(o.recipient)}</dd>
         ${direct ? '<dt>Route</dt><dd>Paid with ICP directly</dd>' : `<dt>Houdiniswap order</dt><dd>${esc(h?.houdiniId || '—')}</dd>`}
         <dt>Router deposit account</dt><dd style="word-break:break-all;max-width:260px">${esc(o.icpDepositAccount)}</dd>`;
     } catch (e) {
+      if (code !== currentOrder) return;
       $('orderErr').textContent = e.message;
+      if (e.status === 404) { $('foreignNote').hidden = true; delay = null; }
     }
+    nextPoll(code, delay);
   }
 
   document.addEventListener('click', (ev) => {
@@ -971,7 +1029,7 @@
   function route() {
     const m = location.hash.match(/order=(\d+-[0-9a-f]{20})/);
     if (m) showOrder(m[1]);
-    else { clearInterval(pollTimer); $('orderView').hidden = true; $('swapView').hidden = false; renderRecent(); }
+    else { currentOrder = null; clearTimeout(pollTimer); $('orderView').hidden = true; $('swapView').hidden = false; renderRecent(); }
   }
   window.addEventListener('hashchange', route);
 

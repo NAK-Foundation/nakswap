@@ -51,6 +51,11 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
 
   public func setBreakNextSwap(b : Bool) : async () { breakNextSwap := b };
   public func setBonusNextSwap(n : Nat) : async () { bonusNextSwap := n };
+  // Test hook: a stranger sends the swapping helper tokens mid-swap (ICP and/or NAK).
+  var strayIcpNextSwap = 0;
+  var strayNakNextSwap = 0;
+  public func setStrayNextSwap(icpAmt : Nat, nakAmt : Nat) : async () { strayIcpNextSwap := icpAmt; strayNakNextSwap := nakAmt };
+  type Minter = actor { mint : shared (Ext.Account, Nat) -> async Nat };
 
   public query func getUserUnusedBalance(user : Principal) : async { #ok : { balance0 : Nat; balance1 : Nat }; #err : Ext.PoolError } {
     let icp = unusedIcp.get(user) ?? 0;
@@ -152,6 +157,8 @@ actor class MockSwapPool(icpLedger : Principal, nakLedger : Principal, icpIsToke
     let minOut = args.amountOutMinimum.toNat() ?? (return #err(#InternalError("bad amountOutMinimum")));
     let self = Principal.fromActor(this);
     let icp : IcpLedger = actor (icpLedger.toText());
+    if (strayIcpNextSwap > 0) { let m : Minter = actor (icpLedger.toText()); ignore await m.mint({ owner = caller; subaccount = null }, strayIcpNextSwap); strayIcpNextSwap := 0 };
+    if (strayNakNextSwap > 0) { let m : Minter = actor (nakLedger.toText()); ignore await m.mint({ owner = caller; subaccount = null }, strayNakNextSwap); strayNakNextSwap := 0 };
 
     // Deposit.
     switch (

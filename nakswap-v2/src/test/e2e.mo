@@ -505,18 +505,13 @@ actor Test {
     await pool.setFailTxQuery(false);
     check("all three helpers out of rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = i.quarantined));
     check("the order just waits (" # statusTag(await statusOf(ob.id)) # ")", statusTag(await statusOf(ob.id)) == "awaitingDeposit");
+    let strayAcctB = { owner = routerId; subaccount = ?Account.straySubaccount };
+    let strayBeforeB = await icp.icrc1_balance_of(strayAcctB);
     await router.runRecovery();
-    // Helper balances: one still holds 0.1 ICP a stranger sent it in 10f (more than dust).
-    var held = 99;
-    var k = 0;
-    for (h in hIds.values()) { if ((await icp.icrc1_balance_of({ owner = h; subaccount = null })) > ICP / 100) { held := k }; k += 1 };
-    let infosB = await router.helpers();
-    var okB = true;
-    for (i in Nat.range(0, 3)) { if (infosB[i].quarantined != (i == held)) { okB := false } };
-    check("empty helpers released, the one holding 0.1 ICP waits for the admin (held " # held.toText() # ")", okB and held < 3);
-    check("admin moves it to stray", switch (await router.helperRecover(held, null)) { case (#ok _) { true }; case _ { false } });
-    await router.runRecovery();
-    check("all helpers back in rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined));
+    // One helper still held 0.1 ICP a stranger sent it in 10f: unlinked, so it's a stranger's
+    // and goes to the stray account; every helper comes back by itself.
+    check("all helpers back in rotation by themselves", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined));
+    check("the stranger's 0.1 ICP went to the stray account", (await icp.icrc1_balance_of(strayAcctB)) > strayBeforeB);
     check("and the order completes (" # statusTag(await pokeUntilSettled(ob.id)) # ")", statusTag(await statusOf(ob.id)) == "completed");
     Debug.print("11c. a second payment to a finished order is swapped too");
     let vc = Principal.fromBlob("\0B\03");
@@ -566,7 +561,8 @@ actor Test {
     check("the fee went to the fee wallet", (await icp.icrc1_balance_of({ owner = feeWallet; subaccount = null })) > feeWalletBeforeF);
     check("and not back to the user", (await icp.icrc1_balance_of({ owner = vf; subaccount = null })) == vfIcp and statusTag(await statusOf(of.id)) == "completed");
     ignore await router.clearHelper(wf);
-    // A quarantined helper with no order linked but more than dust in it stays out for the admin.
+    // A quarantined helper with no order linked holds no order's funds: whatever is in it goes
+    // to the stray account and it comes back into rotation, with no admin needed.
     let og = await newOrder(vf, null);
     await houdiniPays(og.depositAccountId, ICP);
     await pool.setFailTxQuery(true);
@@ -577,12 +573,52 @@ actor Test {
     for (info in (await router.helpers()).values()) { if (info.quarantined and info.holdsOrder == null) { wg := jg }; jg += 1 };
     check("one helper out, unlinked", wg < 3);
     ignore await icp.mint({ owner = hIds[wg]; subaccount = null }, ICP);
+    let strayBeforeG = await icp.icrc1_balance_of(strayAcctB);
     await router.runRecovery();
-    check("holding 1 ICP: stays out of rotation", (await router.helpers())[wg].quarantined);
-    check("admin sends it to the stray account", switch (await router.helperRecover(wg, null)) { case (#ok _) { true }; case _ { false } });
-    await router.runRecovery();
-    check("then it's released", not (await router.helpers())[wg].quarantined);
+    check("holding 1 ICP, unlinked: moved to the stray account", (await icp.icrc1_balance_of(strayAcctB)) == strayBeforeG + ICP - icpFee);
+    check("and released by itself", not (await router.helpers())[wg].quarantined);
     check("and the waiting order completes", statusTag(await pokeUntilSettled(og.id)) == "completed");
+
+    Debug.print("11g. tokens a stranger sends a helper mid-swap can't stall it");
+    let vs = Principal.fromBlob("\0B\0A");
+    let os = await newOrder(vs, null);
+    await houdiniPays(os.depositAccountId, ICP);
+    await pool.setStrayNextSwap(30_000, 0); // 0.0003 ICP arrives while the helper swaps
+    let ss = await pokeUntilSettled(os.id);
+    check("order completes (got " # statusTag(ss) # ")", statusTag(ss) == "completed");
+    check("no helper out of rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined and i.holdsOrder == null));
+    check("the user got NAK", (await nak.icrc1_balance_of({ owner = vs; subaccount = null })) > 0);
+    // Stranger NAK: more than the quote + 2% can explain. The order is paid its own share.
+    let vn = Principal.fromBlob("\0B\0B");
+    let on = await newOrder(vn, null);
+    await houdiniPays(on.depositAccountId, ICP);
+    await pool.setStrayNextSwap(0, 50_000 * NAK);
+    let sn = await pokeUntilSettled(on.id);
+    check("order completes despite extra NAK (got " # statusTag(sn) # ")", statusTag(sn) == "completed");
+    let nOut = switch sn { case (#completed c) { c.nakOut }; case _ { 0 } };
+    let leftNak = await nak.icrc1_balance_of({ owner = routerId; subaccount = ?on.depositSubaccount });
+    check("paid only its own share; the extra stays in the deposit account (" # nOut.toText() # " paid, " # leftNak.toText() # " left)", nOut > 0 and (await nak.icrc1_balance_of({ owner = vn; subaccount = null })) == nOut and leftNak > 40_000 * NAK);
+    check("helpers all in rotation", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined and i.holdsOrder == null));
+    // Stranger NAK during a swap ICPSwap refunds: the refund still goes through.
+    let vr = Principal.fromBlob("\0B\0C");
+    let orr = await newOrder(vr, ?(1_000_000_000 * NAK));
+    await houdiniPays(orr.depositAccountId, ICP);
+    await pool.setStrayNextSwap(0, 500 * NAK);
+    let sr = await pokeUntilSettled(orr.id);
+    check("refunded despite NAK dust (got " # statusTag(sr) # ")", statusTag(sr) == "refunded");
+    check("helpers all in rotation after the refund", (await router.helpers()).all(func(i : Types.HelperInfo) : Bool = not i.quarantined and i.holdsOrder == null));
+
+    Debug.print("11h. late-deposit watch backs off as the order ages");
+    let lcfg = await router.getConfig();
+    func fakeOrder(created : Int) : Types.Order = {
+      id = 0; recipient = vs; refundTo = vs; minNakOut = 0; createdAt = created; subaccount = ""; depositAccountId = "";
+      var houdiniId = null; var status = #expired; var lastCheckedAt = 0;
+    };
+    let tnow = Time.now();
+    let closedAgo = func(h : Int) : Int = tnow - lcfg.orderTtlSeconds * 1_000_000_000 - h * 3_600_000_000_000;
+    check("10 min in the first 6 h", Engine.lateInterval(fakeOrder(closedAgo(1)), lcfg, tnow) == 600_000_000_000);
+    check("hourly until 24 h", Engine.lateInterval(fakeOrder(closedAgo(12)), lcfg, tnow) == 3_600_000_000_000);
+    check("every 6 h after that", Engine.lateInterval(fakeOrder(closedAgo(30)), lcfg, tnow) == 21_600_000_000_000);
 
     Debug.print("11e. price guard");
     let now = Time.now();
@@ -592,7 +628,7 @@ actor Test {
     check("2% worse: allowed", Engine.priceSane(ref, 980, now));
     check("4% worse: waits", not Engine.priceSane(ref, 960, now));
     check("better price: allowed", Engine.priceSane(ref, 1_100, now));
-    check("stale reference ignored", Engine.priceSane(ref, 500, now + 700_000_000_000));
+    check("stale reference: waits for a fresh sample", not Engine.priceSane(ref, 1_000, now + 700_000_000_000));
     for (_ in Nat.range(0, 6)) { Engine.updatePriceRef(ref, 960, now) };
     check("a real move is followed within a few ticks", Engine.priceSane(ref, 960, now));
 

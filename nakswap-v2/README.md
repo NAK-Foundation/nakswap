@@ -63,9 +63,10 @@ principal, same price guards.
 ### Late deposits
 
 An expired order (direct or Houdini) is not forgotten, and neither is a finished one: the
-router re-checks the deposit account of expired, completed and refunded orders about every 10
-minutes for 3 days after the order's window closed, most overdue first, 10 checks per tick, at
-most 3,000 orders watched. A finished order is skipped while any of its NAKSwap fee is still
+router re-checks the deposit account of expired, completed and refunded orders for 3 days after
+the order's window closed: every 10 minutes for the first 6 hours, hourly until 24 hours, then
+every 6 hours (about 65 checks per order instead of 440), most overdue first, 10 checks per
+tick, at most 3,000 orders watched. A finished order is skipped while any of its NAKSwap fee is still
 in its account. ICP that turns up (more than two ledger fees) moves the order back to
 `awaitingDeposit`, and the worker swaps it, or refunds it if it is now too small, too big, or
 below the order's guaranteed minimum. This covers late Houdini deliveries, direct payments
@@ -75,10 +76,13 @@ aren't watched (an admin resolves them).
 
 ### Price guard
 
-The worker samples the pool's marginal price every tick and keeps a slow moving average. A
-swap whose live price is more than 3% worse than that average waits for a later tick (the
-average follows a genuine move within a few minutes), so a price pushed just before the
-router buys doesn't pass the impact and slippage checks.
+The worker samples the pool's marginal price after each tick's swaps (every tick while
+orders are open, every 4th tick otherwise) and keeps a slow moving average, stored across
+upgrades. A swap whose live price is more than 3% worse than the average of earlier ticks
+waits for a later tick (the average follows a genuine move within a few minutes; a reference
+with no sample for 10 minutes also makes swaps wait for the next sample), so a
+price pushed just before the router buys doesn't pass the impact and slippage checks. A
+swap that finishes pays out (or refunds) in the same tick.
 
 ## Swap helpers (parallel swaps)
 
@@ -103,8 +107,12 @@ Nothing passes through the router's main account, so swaps can't mix.
 
 Safety:
 - A helper refuses work unless its last job ended clean and ICPSwap has nothing pending for
-  it. Funds a stranger sends to a helper are set aside to the router's stray account
-  (`recover-stray`) before the next job, never mixed into an order.
+  it. Every job links its helper to its order until the order's funds are out of it, so an
+  unlinked helper holds only tokens a stranger sent it: they go to the router's stray account
+  (`recover-stray`) and the helper goes back into rotation by itself, never mixed into an
+  order. Tokens sent to a helper during a job can't stall it either: the order is paid at
+  most what its own swap explains (quote + 5%, never below the user's minimum), and extra ICP or NAK stays in its deposit
+  account (extra ICP is swapped or refunded for the user by the late-deposit watch).
 - If ICPSwap hasn't finished paying out within the wait (or a payout failed on ICPSwap's side),
   the helper keeps everything together, is quarantined and linked to that order, and the order
   waits in "needs review". The worker retries on every tick: as soon as ICPSwap is done, the
@@ -452,11 +460,20 @@ Relay (`relay/src/app.js`, `server.js`):
   URLs over 2 KB are 414; a declared body over 8 KB is 413 before it is read.
 - At most 64 requests that call out to Houdini or the IC at once, 6 per visitor; past that a
   quick 503 / 429 instead of a pile-up. At most 2,000 open connections (`MAX_CONNECTIONS`).
-- Orders: 5 per IP per 10 min, 150 per hour overall (`ORDER_LIMIT_PER_HOUR` on Railway to change it). Quotes (Houdini and ICP) 30/min per IP and
-  1,200/hour overall, cached 20 s; a used quote is never served again from the cache. Limiter,
+- Visitors are keyed by IPv4 address or IPv6 /64; Houdini gets the visitor's own address.
+- Orders: 5 per visitor per 10 min, 150 per hour overall (`ORDER_LIMIT_PER_HOUR`), of which
+  pay-with-ICP orders (free to open) may use 40%; unpaid ones are cancelled after 45 minutes,
+  also after a relay restart (the relay reloads them from the router). Quotes: 30/min per
+  visitor; Houdini quotes also 120/hour per visitor and 1,200/hour overall, counting only
+  real Houdini calls (repeats come from the 20 s cache); pay-with-ICP quotes 6,000/hour. A
+  used quote is never served again from the cache. Limiter,
   cache and quote-registry memory is bounded (the registry drops its oldest entries, never all).
 - Order links are `id-key`, where the key is an HMAC of the id under the relay seed; without
-  the key `/api/orders/:id` answers 404. One router poke per order per 15 s.
+  the key `/api/orders/:id` answers 404. One router poke per order per 15 s, never awaited by
+  the page's request. The order page polls every 5 s while something moves, 8–20 s while
+  waiting for a deposit, once a minute when expired or in review, never when done or hidden.
+  An order opened from a link (not created on this device) shows a warning and hides where to
+  pay until the visitor confirms they created it.
 - Input validation on every field (strings only, plain decimal amounts), JSON only, 8 KB body
   cap, header/request timeouts, 15 s timeouts on outbound calls, no CORS, CSP that allows only
   the page's own script (by hash) and Houdini's token icons, frame/sniffing/referrer headers.

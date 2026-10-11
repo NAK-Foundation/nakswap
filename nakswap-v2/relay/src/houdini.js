@@ -47,7 +47,7 @@ export function createHoudini({ apiKey, apiSecret, fetchImpl = fetch, base = BAS
       headers: {
         Authorization: `${apiKey}:${apiSecret}`,
         'Content-Type': 'application/json',
-        'x-user-ip': user?.ip || '0.0.0.0',
+        'x-user-ip': user?.rawIp || user?.ip || '0.0.0.0',
         'x-user-agent': user?.agent || 'nakswap-relay',
         'x-user-timezone': user?.timezone || 'UTC',
       },

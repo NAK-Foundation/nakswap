@@ -53,6 +53,9 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   // Finished orders the late-deposit watch reopened (for clearer review messages).
   let revived = Set.empty<Nat>();
   let stats : Types.Stats = { var swaps = 0; var icpSwapped = 0; var nakDelivered = 0; var ready = false };
+  // Price reference for the swap price guard. Stable, so an upgrade (done in about a minute)
+  // doesn't leave the guard without a reference.
+  let priceRef : Types.PriceRef = { var probe = 0; var at = 0 };
 
   transient let self = Principal.fromActor(this);
   transient let rt : Types.Runtime = {
@@ -66,7 +69,7 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     jobFees;
     lateWatch;
     stats;
-    priceRef = { var probe = 0; var at = 0 };
+    priceRef;
     revived;
     var nextHelper = 0;
   };
@@ -115,6 +118,8 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
   // least recently checked first, so a pile of orders can neither starve real ones nor make
   // the router poll the ledger nonstop.
   // tickSeconds = 0 disables it (tests drive the state machine through `poke`).
+  transient var tickCount = 0;
+
   func tick() : async () {
     let ids = active.values().toArray();
     var n = 0;
@@ -133,10 +138,6 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
         case null { active.remove(id) };
       };
     };
-
-    // Keep the price reference fresh (one pool query per tick, after payouts so a slow pool
-    // can't hold them up).
-    await* Engine.samplePrice(state, rt);
 
     let now = Time.now();
     let due = ids.filter(
@@ -175,6 +176,12 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
         n += 1;
       };
     };
+    // Price reference, sampled after this tick's swaps: a swap is always judged against the
+    // average of earlier ticks, so a price pushed just before a tick isn't averaged in first.
+    // One pool query per tick while orders are open; every few ticks otherwise.
+    tickCount += 1;
+    if (active.size() > 0 or tickCount % Guard.idleSampleEvery == 0) { await* Engine.samplePrice(state, rt) };
+
     await* Engine.sweepOrderFees(state, fees, rt, orders);
     await* Engine.autoRecover(state, fees, rt, orders, active, self);
     await* Engine.watchLate(state, rt, orders, active, self, false);
@@ -184,8 +191,14 @@ actor class Router(init : Types.Config, tickSeconds : Nat) = this {
     forgetOldHoudiniIds(now);
   };
 
+  // A swap that finished pays out (or refunds) right away instead of on the next tick.
   func stepTask(id : Nat) : async () {
-    ignore await* Engine.step(state, fees, rt, orders, active, self, id);
+    switch (await* Engine.step(state, fees, rt, orders, active, self, id)) {
+      case (#processed(#payoutPending _ or #refundPending _)) {
+        ignore await* Engine.step(state, fees, rt, orders, active, self, id);
+      };
+      case _ {};
+    };
   };
 
   // Walks a few orders per tick; finished orders older than 30 days drop their Houdini id.

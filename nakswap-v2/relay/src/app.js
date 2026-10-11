@@ -124,13 +124,33 @@ function userContext(req, viaCloudflare = false) {
   const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
   const ip = (typeof cf === 'string' && cf.trim()) || (typeof real === 'string' && real.trim()) || fwd[fwd.length - 1] || req.socket?.remoteAddress || '0.0.0.0';
   const tz = String(req.headers['x-user-timezone'] || 'UTC');
-  // IPv6 clients usually control a whole /64, so limit per /64 rather than per address.
-  const key = ip.includes(':') && !ip.includes('.') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : ip;
   return {
-    ip: key.slice(0, 64),
+    // Rate limits are per visitor: one IPv4 address, or one IPv6 /64 (what one household or
+    // phone usually gets). The visitor's own address goes to Houdini as is.
+    ip: limitKey(ip),
+    // Outer key for IPv6: the /48 (a free tunnel gives one person a whole /48 of /64s).
+    net: limitKey(ip, 48),
+    rawIp: String(ip).slice(0, 64),
     agent: String(req.headers['user-agent'] || 'unknown').slice(0, 256),
     timezone: /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(tz) ? tz : 'UTC',
   };
+}
+
+// IPv6 -> its /64 prefix in full form (so "2a01:4f8::1" and "2a01:4f8:0:0::2" match);
+// IPv4 and IPv4-mapped IPv6 -> the IPv4 address.
+export function limitKey(ip, bits = 64) {
+  let a = String(ip || '').trim().toLowerCase().split('%')[0];
+  const mapped = a.match(/^::ffff:(\d{1,3}(\.\d{1,3}){3})$/);
+  if (mapped) return mapped[1];
+  if (!a.includes(':')) return a.slice(0, 64);
+  const [head, tail = null] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  if (a.includes('::') && h.length + t.length < 8) h.push(...new Array(8 - h.length - t.length).fill('0'));
+  const n = bits === 48 ? 3 : 4;
+  const groups = [...h, ...t].slice(0, n).map((g) => (g || '0').replace(/^0+(?=.)/, ''));
+  while (groups.length < n) groups.push('0');
+  return `${groups.join(':')}::/${bits === 48 ? 48 : 64}`;
 }
 
 // Input shapes accepted from the page; anything else is rejected before it reaches Houdini
@@ -214,7 +234,15 @@ function serveStatic(req, res, pathname) {
   res.writeHead(200, {
     ...(isAdminPage ? ADMIN_HEADERS : SECURITY_HEADERS),
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': isAdminPage ? 'no-store' : rel === 'index.html' || rel === 'terms.html' || rel.startsWith('admin/') ? 'no-cache' : 'public, max-age=300',
+    // Pages and the dashboard bundle: always revalidated. Fonts never change: a year.
+    // Images and icons: a day.
+    'Cache-Control': isAdminPage
+      ? 'no-store'
+      : rel === 'index.html' || rel === 'terms.html' || rel.startsWith('admin/')
+        ? 'no-cache'
+        : rel.startsWith('fonts/')
+          ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=86400',
   });
   fs.createReadStream(file)
     .on('error', () => res.destroy())
@@ -238,7 +266,7 @@ export function createApp({
   log = () => {},
   secret = crypto.randomBytes(32),
   pokeEveryMs = 15_000,
-  houdiniCacheMs = 5_000,
+  houdiniCacheMs = 15_000,
   quoteCacheMs = 20_000,
   // Site-wide orders per hour. 150 keeps well inside the router's 150 open-order cap (orders
   // stay open ~5-45 min while Houdini works) and its ~120-180 swaps/hour throughput.
@@ -312,8 +340,18 @@ export function createApp({
   const allowOrder = limiter(5, 10 * 60_000);
   const allowOrderGlobal = limiter(orderLimitPerHour, 60 * 60_000);
   const allowQuote = limiter(30, 60_000);
-  // Site-wide quote ceiling, so many addresses together can't use up the Houdini quota.
+  // Site-wide ceiling on quotes that reach Houdini (cached answers don't count), plus a
+  // per-visitor hourly cap, so a few addresses can't use up the Houdini quota for everyone.
   const allowQuoteGlobal = limiter(1_200, 60 * 60_000);
+  const allowQuoteHourly = limiter(120, 60 * 60_000);
+  // The same limits, 6x looser, per IPv6 /48 (for IPv4 the key is the address itself).
+  const allowQuoteHourlyNet = limiter(720, 60 * 60_000);
+  const allowOrderNet = limiter(30, 10 * 60_000);
+  // Pay-with-ICP quotes never reach Houdini (two free pool queries); their own ceiling.
+  const allowIcpQuoteGlobal = limiter(6_000, 60 * 60_000);
+  // Pay-with-ICP orders cost nothing to open, so they get their own, smaller share of the
+  // hourly order budget: unpaid ones can't fill the router's open-order slots.
+  const allowDirectOrderGlobal = limiter(Math.max(1, Math.floor(orderLimitPerHour * 0.4)), 60 * 60_000);
   // Orders this relay opened that are still waiting for a deposit (lost on restart; the
   // router's own TTL is the backstop). Used to cap open orders per visitor and to cancel
   // orders whose Houdini exchange expired or failed.
@@ -384,7 +422,6 @@ export function createApp({
     if (!ID_RE.test(fromId) || !AMOUNT_RE.test(amount)) return [400, { error: 'invalid token or amount' }];
     if (refundAddress === null || (refundAddress && !ADDR_RE.test(refundAddress))) return [400, { error: 'invalid refund address' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
-    if (!allowQuoteGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a few minutes.' }];
     // Same token + amount within a few seconds (typing, re-renders): reuse the last answer
     // instead of spending another Houdini quote request.
     // Per visitor: quote ids are never handed to two different people.
@@ -392,6 +429,8 @@ export function createApp({
     const cached = quoteCache.get(qKey);
     if (cached && Date.now() - cached.at < quoteCacheMs) return [200, cached.result];
     for (const [k, v] of quoteCache) if (Date.now() - v.at >= quoteCacheMs) quoteCache.delete(k);
+    if (!allowQuoteHourly(user.ip) || (user.net !== user.ip && !allowQuoteHourlyNet(user.net))) return [429, { error: 'Too many quotes from your connection this hour. Try again later.' }];
+    if (!allowQuoteGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a few minutes, or pay with ICP directly.' }];
     const all = await houdini.quotesToIcp({ fromId, amount, refundAddress: refundAddress || undefined, user });
     // Houdini can return dozens of routes; show the best Standard and the best Private one.
     const best = new Map();
@@ -418,10 +457,17 @@ export function createApp({
       });
     }
     const routes = [];
-    for (const q of quotes) {
+    // Both routes' pool previews at once.
+    const previews = await Promise.all(
+      quotes.map((q) => {
+        const e8s = BigInt(Math.floor(Number(q.amountOut) * 1e8));
+        return e8s > 0n ? ic.previewSwap(e8s) : null;
+      }),
+    );
+    for (const [i, q] of quotes.entries()) {
       const icpE8s = BigInt(Math.floor(Number(q.amountOut) * 1e8));
       if (icpE8s <= 0n) continue;
-      const p = await ic.previewSwap(icpE8s);
+      const p = previews[i];
       let blocked = null;
       if (q.min && Number(amount) < Number(q.min)) blocked = `Houdini minimum for this route is ${q.min}`;
       else if (q.max && Number(amount) > Number(q.max)) blocked = `Houdini maximum for this route is ${q.max}`;
@@ -475,12 +521,12 @@ export function createApp({
     const amount = str(body.amount);
     if (!amount || !ICP_AMOUNT_RE.test(amount) || !(Number(amount) > 0)) return [400, { error: 'Enter an ICP amount, e.g. 2.5 (up to 8 decimals)' }];
     if (!allowQuote(user.ip)) return [429, { error: 'too many quote requests, slow down' }];
-    if (!allowQuoteGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a few minutes.' }];
     const icpE8s = toE8s(amount);
     const qKey = `${user.ip}|icp|${amount}`;
     const cached = quoteCache.get(qKey);
     if (cached && Date.now() - cached.at < quoteCacheMs) return [200, cached.result];
     for (const [k, v] of quoteCache) if (Date.now() - v.at >= quoteCacheMs) quoteCache.delete(k);
+    if (!allowIcpQuoteGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a few minutes.' }];
     let blocked = null;
     let suggestAmount = null;
     let p = { amountIn: 0n, nakswapFee: 0n, nakOut: 0n, impactBps: 0n };
@@ -563,13 +609,14 @@ export function createApp({
     } catch (e) {
       return [400, { error: `invalid principal: ${e.message}` }];
     }
-    if (!allowOrder(user.ip)) return [429, { error: 'Too many orders from your connection. Wait a few minutes and try again.' }];
+    if (!allowOrder(user.ip) || (user.net !== user.ip && !allowOrderNet(user.net))) return [429, { error: 'Too many orders from your connection. Wait a few minutes and try again.' }];
     if ([...openOrders.values()].filter((o) => o.ip === user.ip).length >= MAX_OPEN_PER_IP) {
       return [429, { error: 'You already have several swaps waiting for a deposit. Finish or let them expire first.' }];
     }
     const q = issued.get(quoteId);
     if (!q || Date.now() - q.at > QUOTE_TTL_MS) return [409, { error: 'That quote has expired. Get a fresh quote and try again.' }];
     if (q.blocked) return [400, { error: `That route can't be used: ${q.blocked}.` }];
+    if (q.kind === 'icp' && !allowDirectOrderGlobal('all')) return [503, { error: 'Many pay-with-ICP swaps are waiting for payment right now. Please try again in a little while.' }];
     if (!allowOrderGlobal('all')) return [503, { error: 'NAKSwap is very busy right now. Please try again in a little while.' }];
     issued.delete(quoteId); // one order per quote
     // ...and never hand the same quote out again from the short-lived quote cache.
@@ -639,13 +686,14 @@ export function createApp({
     ];
   }
 
-  // At most one router poke per order every pokeEveryMs, however many tabs are polling.
-  async function nudge(orderId) {
+  // At most one router poke per order every pokeEveryMs, however many tabs are polling. Not
+  // awaited by the page's request: a poke can run a whole swap; the next poll shows it.
+  function nudge(orderId) {
     const k = String(orderId);
     if (Date.now() - (lastPoke.get(k) || 0) < pokeEveryMs) return;
     lastPoke.set(k, Date.now());
     if (lastPoke.size > 5_000) lastPoke.clear();
-    await ic.poke(orderId).catch(() => {});
+    ic.poke(orderId).catch(() => {});
   }
 
   async function getOrder(id, key, user) {
@@ -674,8 +722,8 @@ export function createApp({
       }
       // ICP has landed, or NAK / a refund is ready to go: nudge the router instead of waiting
       // for its next pass.
-      if ((stage === 'awaitingDeposit' && received > 0n) || stage === 'payoutPending' || stage === 'refundPending') await nudge(order.id);
-      const fresh = (await ic.getOrder(BigInt(id))) ?? order;
+      if ((stage === 'awaitingDeposit' && received > 0n) || stage === 'payoutPending' || stage === 'refundPending') nudge(order.id);
+      const fresh = order;
       return [
         200,
         {
@@ -726,8 +774,8 @@ export function createApp({
     // At most one poke per order every pokeEveryMs, however many tabs are polling.
     const k = String(order.id);
     const st = statusName(order.status);
-    if ((hd?.status === 4 && st === 'awaitingDeposit') || st === 'payoutPending' || st === 'refundPending') await nudge(order.id);
-    const fresh = (await ic.getOrder(BigInt(id))) ?? order;
+    if ((hd?.status === 4 && st === 'awaitingDeposit') || st === 'payoutPending' || st === 'refundPending') nudge(order.id);
+    const fresh = order;
     return [
       200,
       {
@@ -792,6 +840,30 @@ export function createApp({
     }
   }
   if (cleanupEveryMs > 0) setInterval(() => cleanup().catch(() => {}), cleanupEveryMs).unref();
+
+  // After a restart or deploy: pick up the router's unpaid pay-with-ICP orders again, so
+  // they are still cancelled when their window ends (they would otherwise hold open-order
+  // slots for the router's full order window).
+  async function restoreOpenOrders() {
+    if (typeof ic.activeOrderIds !== 'function' || !ic.routerId) return;
+    const ids = await ic.activeOrderIds();
+    for (const id of ids.slice(0, 500)) {
+      const k = String(id);
+      if (openOrders.has(k)) continue;
+      const o = await ic.getOrder(BigInt(id)).catch(() => null);
+      if (!o || o.houdiniId[0] !== DIRECT_ICP || statusName(o.status) !== 'awaitingDeposit') continue;
+      openOrders.set(k, { direct: true, at: Number(BigInt(o.createdAt) / 1_000_000n), ip: null, user: null });
+    }
+  }
+  if (cleanupEveryMs > 0) {
+    let tries = 0;
+    const restore = () =>
+      restoreOpenOrders().catch((e) => {
+        log('restore open orders failed', String(e?.message || e).slice(0, 120));
+        if (++tries < 5) setTimeout(restore, 60_000).unref();
+      });
+    restore();
+  }
 
   return async function handle(req, res) {
     let url;

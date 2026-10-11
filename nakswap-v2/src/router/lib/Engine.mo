@@ -120,11 +120,12 @@ module {
     };
     let picked = due.toArray().sort(func(a : (Nat, Int), b : (Nat, Int)) : Order.Order = Int.compare(a.1, b.1));
     for ((id, at) in picked.sliceToArray(0, Nat.min(picked.size(), Guard.lateChecksPerTick)).values()) {
-      // Next check strictly after this one, so a checked entry always moves behind those
-      // still waiting (even when many expired in the same tick and share a timestamp).
-      let next = Int.max(Time.now(), at) + Guard.lateCheckNanos;
       label one {
       let o = switch (orders.get(id)) { case (?o) { o }; case null { break one } };
+      // Next check strictly after this one, so a checked entry always moves behind those
+      // still waiting (even when many expired in the same tick and share a timestamp).
+      // Spaced out as the order ages: late payments almost always arrive within hours.
+      let next = Int.max(Time.now(), at) + lateInterval(o, cfg, Time.now());
       if (rt.inFlight.contains(id)) { break one };
       rt.inFlight.add(id);
       try {
@@ -149,6 +150,16 @@ module {
     };
   };
 
+  // Every 10 minutes for the first 6 hours after the order's window closed, then hourly
+  // until 24 hours, then every 6 hours until the watch ends (3 days): about 65 ledger
+  // queries per watched order instead of about 440.
+  public func lateInterval(o : Order, cfg : Types.Config, now : Int) : Int {
+    let age = now - (o.createdAt + cfg.orderTtlSeconds * 1_000_000_000);
+    if (age < Guard.lateFastNanos) { Guard.lateCheckNanos } else if (age < Guard.lateHourlyUntilNanos) {
+      Guard.lateHourlyNanos;
+    } else { Guard.lateSlowNanos };
+  };
+
   func icp(cfg : Types.Config) : Ext.Ledger = actor (cfg.icpLedger.toText());
   func nak(cfg : Types.Config) : Ext.Ledger = actor (cfg.nakLedger.toText());
   func pool(cfg : Types.Config) : Ext.SwapPool = actor (cfg.pool.toText());
@@ -162,7 +173,10 @@ module {
   // arbitrage; a genuine move is followed by the average within a few ticks.
   // ---------------------------------------------------------------------------------
   public func priceSane(ref : Types.PriceRef, liveProbe : Nat, now : Int) : Bool {
-    if (ref.probe == 0 or now - ref.at > Guard.priceRefMaxAgeNanos) { return true };
+    // No reference at all (fresh install): nothing to compare with. A reference that went
+    // stale (no sample for 10 minutes): wait for the next tick's sample.
+    if (ref.probe == 0) { return true };
+    if (now - ref.at > Guard.priceRefMaxAgeNanos) { return false };
     liveProbe * bpsDenom >= ref.probe * minus(bpsDenom, Guard.priceGuardBps);
   };
 
@@ -330,14 +344,20 @@ module {
     #processed(order.status);
   };
 
-  // Round-robin over free, non-quarantined helpers. No await: check-and-claim is atomic.
+  // Ends a job's link, only if it is still this order's.
+  func unlink(rt : Types.Runtime, helper : Principal, id : Nat) {
+    if (rt.helperOrders.get(helper) == ?id) { rt.helperOrders.remove(helper) };
+  };
+
+  // Round-robin over free helpers that are neither quarantined nor linked to an order. No
+  // await: check-and-claim is atomic.
   func claimHelper(rt : Types.Runtime) : ?Principal {
     let hs = rt.exec.helpers;
     let n = hs.size();
     var k = 0;
     while (k < n) {
       let h = hs[(rt.nextHelper + k) % n];
-      if (not rt.busyHelpers.contains(h) and not rt.quarantined.contains(h)) {
+      if (not rt.busyHelpers.contains(h) and not rt.quarantined.contains(h) and not rt.helperOrders.containsKey(h)) {
         rt.busyHelpers.add(h);
         rt.nextHelper := (rt.nextHelper + k + 1) % n;
         return ?h;
@@ -428,6 +448,10 @@ module {
     // recovered from the helper later.
     setStatus(order, active, #swapping({ icpIn = amountIn; startedAt = Time.now() }));
     rt.jobFees.add(order.id, nakswapFee);
+    // Linked for the whole job, so a helper holding this order's funds (a job cut short by a
+    // trap or an upgrade) is never mistaken for one holding a stranger's tokens. Removed
+    // again below whenever the job ends with nothing of the order's left in the helper.
+    rt.helperOrders.add(helper, order.id);
     let h : Ext.Helper = actor (helper.toText());
     let result = try {
       ?(await h.swap({
@@ -447,11 +471,13 @@ module {
       case (?(#done d)) { d };
       case (?#busy) {
         // Momentarily unavailable (e.g. a ledger hiccup); nothing moved. Try again later.
+        unlink(rt, helper, order.id);
         rt.jobFees.remove(order.id);
         setStatus(order, active, #awaitingDeposit);
         return;
       };
       case (?#dirty _ or ?#notAuthorized) {
+        unlink(rt, helper, order.id);
         rt.jobFees.remove(order.id);
         // Holding funds that may be someone's late payout, or misconfigured: nothing moved
         // for this order; stop using this helper until an admin clears it.
@@ -465,16 +491,17 @@ module {
         // attempt's approval fee); otherwise the helper may hold this order's ICP.
         let now = try { await icpL.icrc1_balance_of({ owner = self; subaccount = sub }) } catch (_) { 0 };
         if (now == bal or now + fee == bal) {
+          unlink(rt, helper, order.id);
           rt.jobFees.remove(order.id);
           setStatus(order, active, #awaitingDeposit);
           return;
         };
-        rt.helperOrders.add(helper, order.id);
         setStatus(order, active, #needsReview("helper call failed after taking the ICP; recover with helper-recover (helper " # helper.toText() # ")"));
         return;
       };
     };
     if (not d.pulled) {
+      unlink(rt, helper, order.id);
       rt.jobFees.remove(order.id);
       setStatus(order, active, #awaitingDeposit); // nothing moved; try again later
       return;
@@ -517,23 +544,29 @@ module {
       setStatus(order, active, #needsReview(why # " (helper " # helper.toText() # ")"));
     };
     if (d.swapped and d.nakReturned > cfg.nakFee) {
-      // Defence in depth: the NAK must be what a swap of this order explains, and a swap
-      // that also sent ICP back (a partial fill) is left for the admin to split.
-      if (d.nakReturned > quoteOut + quoteOut / 50 or d.nakReturned + 2 * cfg.nakFee < minOut) {
-        park("swap result doesn't match this order (NAK " # d.nakReturned.toText() # "): " # d.note);
+      // Defence in depth: the user's minimum must be met, and no more ICP can come back than
+      // the job put in.
+      if (d.nakReturned + 2 * cfg.nakFee < minOut or d.icpReturned > amountIn) {
+        park("swap result doesn't match this order (NAK " # d.nakReturned.toText() # ", ICP " # d.icpReturned.toText() # "): " # d.note);
         return;
       };
-      if (d.icpReturned > cfg.icpFee) {
-        park("swap returned both NAK and ICP (" # d.icpReturned.toText() # " e8s): " # d.note);
-        return;
-      };
+      // Anyone can send tokens to a helper while it works, and it returns everything it
+      // holds. So the order is paid at most what its own swap explains: the quote + 5% (room
+      // for a favourable move), and never less than the user's minimum. NAK above that stays
+      // in the deposit account. ICP that came back with the NAK (a partial fill, or a
+      // stranger's tokens) stays there too, and the late-deposit watch swaps or refunds it
+      // once the fee has gone. Neither can stall the order or the helper.
+      let nakForOrder = Nat.min(d.nakReturned, Nat.max(quoteOut + quoteOut / 20, minOut));
+      unlink(rt, helper, order.id);
       rt.jobFees.remove(order.id);
       rt.payFromSub.add(order.id);
       let feeHeld = Nat.min(nakswapFee, icpHere ?? nakswapFee);
       if (feeHeld > cfg.icpFee) { rt.subFees.add(order.id, { amount = feeHeld; to = fees.to; createdAtTime = nowNat64() }) };
-      setStatus(order, active, #payoutPending({ icpIn = amountIn; nakAmount = minus(d.nakReturned, cfg.nakFee); createdAtTime = nowNat64() }));
-    } else if (not d.swapped and d.icpReturned > 0 and d.nakReturned <= cfg.nakFee) {
+      setStatus(order, active, #payoutPending({ icpIn = amountIn; nakAmount = minus(nakForOrder, cfg.nakFee); createdAtTime = nowNat64() }));
+    } else if (not d.swapped and d.icpReturned > 0 and d.nakReturned <= Guard.helperDustNak) {
       // ICPSwap refunded the input: return it all, fee included, from the deposit account.
+      // (NAK dust a stranger sent the helper meanwhile stays in the deposit account.)
+      unlink(rt, helper, order.id);
       rt.jobFees.remove(order.id);
       setStatus(
         order,
@@ -575,6 +608,9 @@ module {
     label each for ((helper, id) in rt.helperOrders.entries().toArray().values()) {
       if (n >= 3) { break each };
       if (rt.busyHelpers.contains(helper) or rt.inFlight.contains(id)) { continue each };
+      // The list was taken before earlier entries' awaits: the helper may have been cleared
+      // and reused for another order since.
+      if (rt.helperOrders.get(helper) != ?id) { continue each };
       let o = switch (orders.get(id)) { case (?o) { o }; case null { continue each } };
       switch (o.status) {
         // Results that don't fit the order (too much NAK, or NAK and ICP together) wait for
@@ -595,7 +631,7 @@ module {
             // that failed inside returnAll leaves funds in the helper, and deciding now would
             // judge this order from a deposit account that's missing them. Until then the
             // helper stays linked to the order and this is retried on the next tick.
-            if (await h.settled(cfg.icpFee, cfg.nakFee)) {
+            if ((await h.settled(cfg.icpFee, cfg.nakFee)) and rt.helperOrders.get(helper) == ?id) {
             let icpHere = await icp(cfg).icrc1_balance_of(acct);
             let nakHere = await nak(cfg).icrc1_balance_of(acct);
             let stillParked = switch (o.status) { case (#needsReview _) { true }; case _ { false } };
@@ -641,15 +677,17 @@ module {
         let h : Ext.Helper = actor (helper.toText());
         let acct = { owner = helper; subaccount = null };
         let (hi, hn) = (await icp(cfg).icrc1_balance_of(acct), await nak(cfg).icrc1_balance_of(acct));
-        // More than dust may be an order's money (e.g. a swap interrupted by an upgrade): leave
-        // it out of rotation for an admin (the dashboard shows it) instead of moving it.
-        if (hi <= Guard.helperDustIcp and hn <= Guard.helperDustNak) {
-          let ok = if (hi > cfg.icpFee or hn > cfg.nakFee) {
+        // Every job links its helper to its order until the order's funds are out, so an
+        // unlinked helper holds only tokens a stranger sent it (or leftovers an admin chose
+        // to unlink): they go to the router's stray account (admin: recoverStray) and the
+        // helper goes back into rotation. Sending tokens to a helper can't stall swaps.
+        let ok = if (hi > cfg.icpFee or hn > cfg.nakFee) {
+          if (rt.helperOrders.containsKey(helper)) { false } else {
             switch (await h.returnAll({ owner = self; subaccount = ?Account.straySubaccount }, cfg.nakFee, cfg.icpFee)) { case (#ok _) { true }; case (#err _) { false } };
-          } else { true };
-          if (ok and (await h.settled(cfg.icpFee, cfg.nakFee)) and not rt.helperOrders.containsKey(helper)) {
-            rt.quarantined.remove(helper);
           };
+        } else { true };
+        if (ok and (await h.settled(cfg.icpFee, cfg.nakFee)) and not rt.helperOrders.containsKey(helper)) {
+          rt.quarantined.remove(helper);
         };
       } catch (_) {} finally { rt.busyHelpers.remove(helper) };
     };
@@ -729,7 +767,9 @@ module {
         // Past the dedup window: try again with a fresh timestamp. If an earlier attempt did
         // go through, the account is empty and the next one fails with InsufficientFunds.
         case (#Err(#TooOld)) { rt.subFees.add(id, { f with createdAtTime = nowNat64() }) };
-        case (#Err(#InsufficientFunds _ or #BadFee _)) { rt.subFees.remove(id) };
+        case (#Err(#InsufficientFunds _)) { rt.subFees.remove(id) };
+        // BadFee: the ledger's fee changed. Keep the record (so the late-deposit watch never
+        // takes the fee for the user's ICP); it goes once the configured fee is updated.
         case (#Err _) {};
       };
     };

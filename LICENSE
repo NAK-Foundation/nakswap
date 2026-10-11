@@ -1,0 +1,28 @@
+Copyright (c) 2026 New Age Kapital. All rights reserved.
+
+This repository, including all source code, canister code, relay code,
+frontend and admin code, designs, documentation and other materials in it
+(the "Software"), is proprietary and confidential and is owned by
+New Age Kapital.
+
+No licence or other right is granted to anyone, by implication, estoppel or
+otherwise, to use, copy, modify, merge, publish, distribute, sublicense,
+deploy, host, sell or create derivative works of the Software, in whole or
+in part, except with the prior written permission of New Age Kapital.
+
+Being able to view or access the Software, for example as a collaborator on
+this repository or through a security review, grants no right to use it
+beyond what New Age Kapital has agreed to in writing.
+
+Third-party components included in this repository (for example the fonts
+in nakswap-v2/relay/public/fonts, licensed under the SIL Open Font License,
+and packages installed from npm or mops) remain under their own licences.
+Those licences apply only to those components.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+NEW AGE KAPITAL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+For permission requests, contact New Age Kapital.

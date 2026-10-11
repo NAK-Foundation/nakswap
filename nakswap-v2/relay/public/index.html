@@ -129,7 +129,7 @@
   .label { display: block; font-size: 12px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; color: var(--nak-text-muted); margin: 0 0 8px; }
   .block { margin-bottom: 22px; }
   .box { display: flex; align-items: center; gap: 10px; border: 1px solid var(--nak-border); border-radius: var(--radius); background: var(--nak-surface-hi); padding: 10px 12px; }
-  .box:focus-within { border-color: var(--nak-border-strong); }
+  .box:focus-within { border-color: var(--nak-accent); box-shadow: 0 0 0 3px var(--nak-accent-soft); }
   .box input { flex: 1; min-width: 0; background: none; border: 0; outline: none; padding: 4px 0; }
   .box input::placeholder { color: #55555c; }
   .box input:disabled { cursor: not-allowed; }
@@ -293,7 +293,7 @@
     <p class="eyebrow">Acquire</p>
     <h1 id="pageTitle">Swap any token into NAK</h1>
     <p class="lede">Send BTC, ETH, SOL, USDT and hundreds more. Houdiniswap turns it into ICP, then the NAKSwap router buys NAK on ICPSwap and delivers it to your ICP principal. Holding ICP already? Pay with it directly. No account, no wallet connection.</p>
-    <div class="stats" id="stats" hidden aria-label="NAKSwap totals">
+    <div class="stats" id="stats" hidden role="group" aria-label="NAKSwap totals">
       <div><b id="stNak">—</b><span>NAK delivered</span></div>
       <div><b id="stSwaps">—</b><span>Swaps completed</span></div>
       <div><b id="stIcp">—</b><span>ICP swapped</span></div>
@@ -307,7 +307,7 @@
       <tr><th scope="row">Pair</th><td>NAK / ICP</td></tr>
       <tr><th scope="row">Bridge</th><td>Houdiniswap<small>Your token → ICP. Paying with ICP skips this step.</small></td></tr>
       <tr><th scope="row">Venue</th><td>ICPSwap, via the NAKSwap router<small>ICP → NAK, sent to your principal</small></td></tr>
-      <tr><th scope="row">Router</th><td class="mono" style="font-size:13px">bkyfl-uyaaa-aaaab-qhl5q-cai</td></tr>
+      <tr><th scope="row">Router</th><td class="mono" style="font-size:13px" translate="no">bkyfl-uyaaa-aaaab-qhl5q-cai</td></tr>
     </table>
 
     <section class="oisy" id="oisy" aria-labelledby="oisyTitle">
@@ -321,7 +321,7 @@
         <li>Tap ICP, then Receive, and copy your <b>ICP Principal</b>.</li>
         <li>Paste it into “Where should NAK go?” and swap.</li>
       </ol>
-      <p class="aside">To see NAK in OISY: Assets, Manage List, Import token, then paste <code id="nakLedger">eig2s-waaaa-aaaam-qbg5a-cai</code><button class="btn copy" type="button" data-copy="nakLedger">Copy</button></p>
+      <p class="aside">To see NAK in OISY: Assets, Manage List, Import token, then paste <code id="nakLedger" translate="no">eig2s-waaaa-aaaam-qbg5a-cai</code><button class="btn copy" type="button" data-copy="nakLedger">Copy</button></p>
     </section>
 
     <h2>Before you swap</h2>
@@ -404,14 +404,14 @@
     <div id="orderView" hidden>
       <div class="card">
         <div class="row" style="margin-bottom:18px">
-          <div><span class="label" style="margin:0">Order</span><div class="mono" style="font-size:20px" id="orderTitle"></div><div class="hint" style="margin-top:4px">Order code <span class="mono" id="orderCode"></span> <button class="btn copy" style="padding:2px 8px;font-size:12px" type="button" data-copy="orderCode">Copy</button><br>Save it to track this swap from any device.</div></div>
+          <div><span class="label" style="margin:0">Order</span><div class="mono" style="font-size:20px" id="orderTitle" translate="no"></div><div class="hint" style="margin-top:4px">Order code <span class="mono" id="orderCode" translate="no"></span> <button class="btn copy" style="padding:2px 8px;font-size:12px" type="button" data-copy="orderCode">Copy</button><br>Save it to track this swap from any device.</div></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
             <button class="btn textsize" id="textSize" type="button" aria-pressed="false">Larger text</button>
             <button class="btn" id="backBtn" type="button">New swap</button>
           </div>
         </div>
         <div class="foreign" id="foreignNote" hidden>
-          <b>This order wasn’t started on this device.</b> Its NAK goes to <span class="mono" id="foreignTo">…</span>. Only send funds to it if you created this swap yourself. NAKSwap and its support never ask you to pay into an order someone else sent you.
+          <b>This order wasn’t started on this device.</b> Its NAK goes to <span class="mono" id="foreignTo" translate="no">…</span>. Only send funds to it if you created this swap yourself. NAKSwap and its support never ask you to pay into an order someone else sent you.
           <div><button class="btn" type="button" id="foreignOk">I created this order, show where to pay</button></div>
         </div>
         <div class="track-head">
@@ -421,7 +421,7 @@
           </div>
           <div class="timer" id="timerBox" hidden>
             <span class="label" style="margin:0 0 4px" id="timerLabel">Time left to send</span>
-            <div class="timer-val" id="timerVal" role="timer" aria-live="off" aria-labelledby="timerLabel">--:--</div>
+            <div class="timer-val" id="timerVal" translate="no" role="timer" aria-live="off" aria-labelledby="timerLabel">--:--</div>
             <div class="timer-note" id="timerNote"></div>
           </div>
         </div>
@@ -429,22 +429,22 @@
         <div class="progress-text" id="progressText"></div>
         <div class="deposit" id="depositBox" hidden>
           <span class="label">Send exactly</span>
-          <div class="amt" id="depAmt"></div>
+          <div class="amt" id="depAmt" translate="no"></div>
           <span class="label" style="margin-top:12px" id="depToLabel">To this address</span>
-          <div class="addr" id="depAddr"></div>
+          <div class="addr" id="depAddr" translate="no"></div>
           <div class="row">
             <button class="btn copy" type="button" data-copy="depAddr" id="depCopy">Copy address</button>
             <span class="muted" style="font-size:13px" id="depExpires"></span>
           </div>
           <div id="depIcrcRow" hidden style="margin-top:14px">
             <span class="label">Or, from Plug or Oisy (ICRC-1 account)</span>
-            <div class="addr" id="depIcrc"></div>
+            <div class="addr" id="depIcrc" translate="no"></div>
             <button class="btn copy" type="button" data-copy="depIcrc">Copy account</button>
           </div>
           <div class="help" id="depNote" hidden></div>
           <div id="depTagRow" hidden style="margin-top:12px">
             <span class="label">Memo / tag (required)</span>
-            <div class="addr" id="depTag"></div>
+            <div class="addr" id="depTag" translate="no"></div>
             <button class="btn copy" type="button" data-copy="depTag">Copy memo</button>
           </div>
         </div>
@@ -452,7 +452,7 @@
         <ol class="steps" id="steps" aria-labelledby="stepsTitle"></ol>
         <div class="hsupport" id="houdiniHelp" hidden>
           <span class="label" style="margin:0 0 6px">Houdiniswap order ID</span>
-          <div class="row"><span class="mono" id="houdiniIdText"></span><button class="btn copy" type="button" data-copy="houdiniIdText">Copy</button></div>
+          <div class="row"><span class="mono" id="houdiniIdText" translate="no"></span><button class="btn copy" type="button" data-copy="houdiniIdText">Copy</button></div>
           <p>Problem with your deposit or the Houdiniswap step (not received, stuck, refund)? Send this ID to Houdiniswap support on Telegram: <a href="https://t.me/HoudiniSwapSupport_bot" target="_blank" rel="noopener noreferrer">@HoudiniSwapSupport_bot</a>. Once the ICP reaches the NAKSwap router, message <a href="https://t.me/NAKSTOKEN" target="_blank" rel="noopener">@NAKSTOKEN</a> with your order code instead. Support never asks for your seed phrase or private keys.</p>
         </div>
         <dl class="facts" id="orderFacts"></dl>
@@ -1260,9 +1260,9 @@
       else delay = o.stage !== 'awaitingDeposit' || arrived ? 5_000 : direct ? 8_000 : 20_000;
       void received;
       $('orderFacts').innerHTML = `
-        <dt>NAK recipient</dt><dd style="word-break:break-all;max-width:260px">${esc(o.recipient)}</dd>
+        <dt>NAK recipient</dt><dd style="word-break:break-all;max-width:260px" translate="no">${esc(o.recipient)}</dd>
         <dt>Route</dt><dd>${direct ? 'Paid with ICP directly' : 'Houdiniswap, then ICPSwap'}</dd>
-        <dt>Router deposit account</dt><dd style="word-break:break-all;max-width:260px">${esc(o.icpDepositAccount)}</dd>`;
+        <dt>Router deposit account</dt><dd style="word-break:break-all;max-width:260px" translate="no">${esc(o.icpDepositAccount)}</dd>`;
     } catch (e) {
       if (code !== currentOrder) return;
       $('orderErr').textContent = e.message;

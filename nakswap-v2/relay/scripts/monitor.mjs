@@ -16,7 +16,7 @@ const ROUTER = Principal.fromText(process.env.ROUTER_CANISTER_ID || 'bkyfl-uyaaa
 const ICP_LEDGER = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
 const NAK_LEDGER = 'eig2s-waaaa-aaaam-qbg5a-cai';
 const POOL = 'd6hdt-qiaaa-aaaag-qm76q-cai';
-const RELAY = process.env.RELAY_URL || 'https://relay-production-e42e.up.railway.app';
+const RELAY = process.env.RELAY_URL || 'https://nakswap.lol';
 const HELPERS = (process.env.HELPER_IDS || 'boo25-byaaa-aaaab-qhmaa-cai,bjp4j-maaaa-aaaab-qhmaq-cai,bamxv-2iaaa-aaaab-qhmba-cai').split(',');
 // Must match Account.straySubaccount in src/common/Account.mo.
 const STRAY = Uint8Array.from([0x4e, 0x41, 0x4b, 0x53, 0x57, 0x41, 0x50, 0x2d, 0x53, 0x54, 0x52, 0x41, 0x59, ...new Array(18).fill(0), 1]);

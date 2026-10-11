@@ -302,7 +302,7 @@ payout to a principal is visible to anyone. What NAKSwap does to keep the rest u
 
 ## Admin dashboard and monitoring
 
-**Dashboard:** https://relay-production-e42e.up.railway.app/admin. Sign in with Internet
+**Dashboard:** https://nakswap.lol/admin. Sign in with Internet
 Identity (id.ai popup). Internet Identity gives each site its own principal, so the first time,
 copy the principal shown at the top and add it as a guardian (controller key):
 
@@ -352,6 +352,24 @@ orders and swaps; payouts and refunds already under way still finish.
   at a different router or operator, or if the live pages (`/`, `/terms`, `/admin`,
   `/admin/app.js`) differ from the repo's files (re-checked once after 90 s to allow for a
   deploy).
+
+## Live domain: nakswap.lol
+
+Done 2026-10-11 (Cloudflare Registrar + Cloudflare DNS, proxied):
+- DNS: `nakswap.lol` and `www` CNAME to Railway (proxied); Railway ownership TXT records;
+  CAA `issue letsencrypt.org` (Railway's CA; Cloudflare adds its own CAs); no-mail records
+  (SPF `-all`, DMARC `p=reject`, null MX). DNSSEC on. Registrar lock, WHOIS redaction and
+  auto-renew on.
+- TLS: SSL mode Full, Always HTTPS, TLS 1.2 minimum, TLS 1.3, 0-RTT off.
+- Page-rewriting features off (Rocket Loader, Email Obfuscation, Automatic HTTPS Rewrites,
+  insecure-JS replacement, Server-side Excludes, Always Online); no Web Analytics injection.
+- WAF custom rules: only GET/HEAD/POST; POST only to `/api/`; unknown host names blocked.
+  Rate limit: 50 `/api/` requests per 10 s per visitor, then blocked for 10 s.
+- Late transform rule sets `x-origin-secret`; Railway `ORIGIN_SECRET` holds the same value
+  and `CANONICAL_HOST=nakswap.lol`. The Railway address answers only `/api/health`; page
+  links to it redirect to nakswap.lol; `www` redirects to the bare domain.
+- If email is ever sent from this domain (e.g. Resend), its records replace the SPF/null MX
+  ones; DMARC stays at reject.
 
 ## Moving to a custom domain
 

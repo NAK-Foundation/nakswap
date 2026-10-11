@@ -564,3 +564,28 @@ test('without the origin lock, Cloudflare headers are ignored (no IP spoofing)',
     close();
   }
 });
+
+test('origin lock with a domain: direct page hits redirect there, API hits are refused', async () => {
+  const ic = fakeIc();
+  const houdini = createMockHoudini({ payIcp: async () => {} });
+  const secret = 'z'.repeat(64);
+  const server = http.createServer(createApp({ houdini, ic, originSecret: secret, canonicalHost: 'nakswap.lol' }));
+  await new Promise((r) => server.listen(0, r));
+  const port = server.address().port;
+  const RW = 'relay-production-e42e.up.railway.app';
+  try {
+    const r = await rawCall(port, 'GET', '/terms?x=1', RW);
+    assert.equal(r.code, 301);
+    assert.equal(r.headers.location, 'https://nakswap.lol/terms?x=1');
+    assert.equal((await rawCall(port, 'GET', '//evil.example/x', RW)).headers.location, 'https://nakswap.lol/x', 'never off-site');
+    assert.equal((await rawCall(port, 'GET', '/api/tokens', RW)).code, 403);
+    assert.equal((await rawCall(port, 'POST', '/api/quote', RW, { amount: '1' })).code, 403);
+    assert.equal((await rawCall(port, 'GET', '/api/health', RW)).code, 200);
+    // Through Cloudflare on the domain: served normally.
+    assert.equal((await rawCall(port, 'GET', '/', 'nakswap.lol', undefined, { 'x-origin-secret': secret, 'cf-connecting-ip': '198.51.100.9' })).code, 200);
+    // www (through Cloudflare) goes to the bare domain.
+    assert.equal((await rawCall(port, 'GET', '/', 'www.nakswap.lol', undefined, { 'x-origin-secret': secret })).headers.location, 'https://nakswap.lol/');
+  } finally {
+    server.close();
+  }
+});

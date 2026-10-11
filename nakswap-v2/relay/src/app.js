@@ -804,6 +804,12 @@ export function createApp({
     // for Railway's own checks.
     const viaCloudflare = fromCloudflare(req);
     if (originDigest && !viaCloudflare && url.pathname !== '/api/health') {
+      // Old links to the hosting address: pages go to the site's own domain (nothing is
+      // served from here); everything else is refused.
+      if (canonicalHost && (req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/') && req.url.length <= 2_048) {
+        res.writeHead(301, { ...SECURITY_HEADERS, Location: `https://${canonicalHost}${url.pathname}${url.search}`, 'Cache-Control': 'no-store' });
+        return res.end();
+      }
       res.writeHead(403, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
       return res.end('forbidden');
     }

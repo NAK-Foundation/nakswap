@@ -1,1 +1,78 @@
-{"lastLevel":"ok","lastAlerts":[]}
+{
+  "lastLevel": "crit",
+  "lastAlerts": [
+    "crit: router controllers changed: 5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae, cpbhu-5iaaa-aaaad-aalta-cai, pov7g-fqaaa-aaaaj-a6z7q-cai, ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe",
+    "crit: helper 0 controllers changed: 5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae, cpbhu-5iaaa-aaaad-aalta-cai, pov7g-fqaaa-aaaaj-a6z7q-cai, ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe",
+    "crit: helper 1 controllers changed: 5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae, cpbhu-5iaaa-aaaad-aalta-cai, pov7g-fqaaa-aaaaj-a6z7q-cai, ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe",
+    "crit: helper 2 controllers changed: 5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae, cpbhu-5iaaa-aaaad-aalta-cai, pov7g-fqaaa-aaaaj-a6z7q-cai, ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe"
+  ],
+  "at": "2026-10-12T00:18:57.766Z",
+  "integrity": {
+    "router": {
+      "moduleHash": "16b6f1fbda96c190ea8a0022c6c2e0025fe091f854ac53698c8a6aa80cb25d36",
+      "controllers": [
+        "5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae",
+        "cpbhu-5iaaa-aaaad-aalta-cai",
+        "pov7g-fqaaa-aaaaj-a6z7q-cai",
+        "ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe"
+      ]
+    },
+    "helper 0": {
+      "moduleHash": "1645787a63797092ee5e9b634fb84dac6d26990207aba7b4d885762b265d3b8f",
+      "controllers": [
+        "5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae",
+        "cpbhu-5iaaa-aaaad-aalta-cai",
+        "pov7g-fqaaa-aaaaj-a6z7q-cai",
+        "ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe"
+      ]
+    },
+    "helper 1": {
+      "moduleHash": "1645787a63797092ee5e9b634fb84dac6d26990207aba7b4d885762b265d3b8f",
+      "controllers": [
+        "5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae",
+        "cpbhu-5iaaa-aaaad-aalta-cai",
+        "pov7g-fqaaa-aaaaj-a6z7q-cai",
+        "ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe"
+      ]
+    },
+    "helper 2": {
+      "moduleHash": "1645787a63797092ee5e9b634fb84dac6d26990207aba7b4d885762b265d3b8f",
+      "controllers": [
+        "5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae",
+        "cpbhu-5iaaa-aaaad-aalta-cai",
+        "pov7g-fqaaa-aaaaj-a6z7q-cai",
+        "ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe"
+      ]
+    },
+    "config": {
+      "admin": "ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe",
+      "operators": [
+        "cih3k-q7hz3-6sleb-2m76m-ebrtd-qw7jo-wwnde-62a3t-by36t-a6hmp-2ae"
+      ],
+      "feeTo": "ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-rqe",
+      "feeBps": 100,
+      "dustTo": "ttfax-iely3-bkfh4-tb7o3-dso2i-acf6j-yh6w5-jclgp-7mnhg-lxbzi-qae",
+      "dustMinIcp": 0.125,
+      "maxOrderIcp": 50,
+      "minOrderIcp": 1,
+      "slippageBps": 100,
+      "maxImpactBps": 500,
+      "orderTtlSeconds": 7200
+    },
+    "originLock": "on",
+    "pages": "match (cfaa6d4)"
+  },
+  "status": {
+    "stuckFees": 0,
+    "ordersLastHour": 0,
+    "acceptingOrders": true,
+    "cycles": 4929107582035,
+    "maxOpenOrders": 150,
+    "openOrders": 0,
+    "ordersWithHelperFunds": 0,
+    "needsReview": 0,
+    "helpers": 3,
+    "quarantinedHelpers": 0,
+    "paused": false
+  }
+}

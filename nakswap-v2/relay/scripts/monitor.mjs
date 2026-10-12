@@ -37,7 +37,9 @@ const ADMIN_PID = 'ym3yz-lpqvj-spesx-r7efc-opibs-gjpts-erxs6-h4fa6-67wby-dnea7-r
 const EXPECT = {
   routerHash: process.env.EXPECT_ROUTER_HASH || sha('router.wasm'),
   helperHash: process.env.EXPECT_HELPER_HASH || sha('helper.wasm'),
-  controllers: list(process.env.EXPECT_CONTROLLERS, `cpbhu-5iaaa-aaaad-aalta-cai,5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae,${ADMIN_PID}`),
+  // CycleOps blackhole (cpbhu), deployer key (5bfmq), the owner's own principal, and the
+  // owner-added canister pov7g (added 2026-10-11).
+  controllers: list(process.env.EXPECT_CONTROLLERS, `cpbhu-5iaaa-aaaad-aalta-cai,5bfmq-m63b2-ekefm-x7uss-tyi4m-kw5if-pjg24-ut2nt-pbm2d-k5tbl-dae,pov7g-fqaaa-aaaaj-a6z7q-cai,${ADMIN_PID}`),
   admin: process.env.EXPECT_ADMIN || ADMIN_PID,
   operators: list(process.env.EXPECT_OPERATORS, 'cih3k-q7hz3-6sleb-2m76m-ebrtd-qw7jo-wwnde-62a3t-by36t-a6hmp-2ae'),
   feeTo: process.env.EXPECT_FEE_TO || ADMIN_PID,
